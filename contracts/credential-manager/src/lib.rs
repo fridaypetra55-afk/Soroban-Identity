@@ -562,6 +562,40 @@ mod tests {
     }
 
     #[test]
+    fn test_verify_uses_ledger_timestamp_not_caller_provided() {
+        let (env, _admin, client) = setup();
+        let issuer = Address::generate(&env);
+        let subject = Address::generate(&env);
+        client.add_issuer(&issuer);
+
+        // Issue a credential that expires 1000 seconds in the future
+        let current_time = env.ledger().timestamp();
+        let expires_at = current_time + 1000;
+        let sig = Bytes::from_array(&env, &[0u8; 64]);
+        let cred_id = client.issue_credential(
+            &issuer,
+            &subject,
+            &CredentialType::Kyc,
+            &Map::new(&env),
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &sig,
+            &expires_at,
+        );
+
+        // Credential should be valid immediately
+        assert!(client.verify_credential(&cred_id));
+
+        // Advance ledger time past expiry
+        env.ledger().with_mut(|li| {
+            li.timestamp = expires_at + 100;
+        });
+
+        // Credential should now be invalid - verify_credential uses env.ledger().timestamp(),
+        // not any caller-provided value, preventing spoofing of time
+        assert!(!client.verify_credential(&cred_id));
+    }
+
+    #[test]
     fn test_revoke_by_different_issuer() {
         let (env, _admin, client) = setup();
         let issuer1 = Address::generate(&env);
