@@ -83,6 +83,18 @@ pub struct Reputation;
 impl Reputation {
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    /// Initializes the reputation contract with an admin address.
+    ///
+    /// Must be called once before any other function. Subsequent calls will
+    /// return [`ContractError::AlreadyInitialized`].
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The address that will have admin privileges over this contract.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::AlreadyInitialized`] if the contract has already
+    /// been initialized.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN) {
             return Err(ContractError::AlreadyInitialized);
@@ -91,6 +103,15 @@ impl Reputation {
         Ok(())
     }
 
+    /// Transfers admin rights to a new address. Only the current admin can call this.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `current_admin` - The current admin address (must sign the transaction).
+    /// * `new_admin` - The address to transfer admin rights to.
+    ///
+    /// # Panics
+    /// Panics if `current_admin` does not match the stored admin address.
     pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
         current_admin.require_auth();
         let stored: Address = env
@@ -122,6 +143,14 @@ impl Reputation {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
+    /// Registers a trusted reporter (admin only).
+    ///
+    /// Registered reporters are the only addresses permitted to call
+    /// [`Self::submit_score`]. Adding an already-registered reporter is a no-op.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `reporter` - The address to register as a trusted reporter.
     pub fn add_reporter(env: Env, reporter: Address) {
         Self::require_admin(&env);
         let mut reporters = Self::get_reporters(&env);
@@ -135,6 +164,15 @@ impl Reputation {
         }
     }
 
+    /// Removes a trusted reporter (admin only).
+    ///
+    /// After removal the address can no longer submit scores. Existing score
+    /// history from this reporter is retained but the reporter no longer counts
+    /// toward [`Self::passes_sybil_check`] active-reporter thresholds.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `reporter` - The reporter address to remove.
     pub fn remove_reporter(env: Env, reporter: Address) {
         Self::require_admin(&env);
         let reporters = Self::get_reporters(&env);
@@ -151,7 +189,15 @@ impl Reputation {
         );
     }
 
-    /// Set the default sybil threshold (admin only).
+    /// Sets the default sybil threshold used by [`Self::passes_sybil_check_default`].
+    ///
+    /// Admin only. Stores a [`DefaultThreshold`] that callers can reference
+    /// without supplying explicit thresholds on every call.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `min_score` - Minimum accumulated score a subject must have.
+    /// * `min_reporters` - Minimum number of distinct active reporters required.
     pub fn set_default_threshold(env: Env, min_score: i64, min_reporters: u32) {
         Self::require_admin(&env);
         env.storage().instance().set(
@@ -163,7 +209,22 @@ impl Reputation {
         );
     }
 
-    /// Anti-sybil check using the stored default threshold.
+    /// Anti-sybil check using the admin-configured default threshold.
+    ///
+    /// Equivalent to calling [`Self::passes_sybil_check`] with the values stored
+    /// by [`Self::set_default_threshold`]. Useful when callers want to rely on
+    /// a protocol-wide threshold rather than supplying their own.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address to evaluate.
+    ///
+    /// # Returns
+    /// `true` if the subject's score and reporter count meet the default threshold.
+    /// `false` if no record exists or the thresholds are not met.
+    ///
+    /// # Panics
+    /// Panics if no default threshold has been set via [`Self::set_default_threshold`].
     pub fn passes_sybil_check_default(env: Env, subject: Address) -> bool {
         let threshold: DefaultThreshold = env
             .storage()
@@ -185,7 +246,28 @@ impl Reputation {
 
     // ── Scoring ───────────────────────────────────────────────────────────────
 
-    /// Submit a score delta for a subject. Caller must be a registered reporter.
+    /// Submits a score delta for a subject. Caller must be a registered reporter.
+    ///
+    /// Scores are accumulated with saturation at zero (score never goes negative).
+    /// A rate limit of [`MIN_INTERVAL`] ledgers is enforced per (reporter, subject)
+    /// pair to prevent spam. The first submission from a reporter for a given
+    /// subject increments that subject's `reporter_count`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `reporter` - The registered reporter address (must sign the transaction).
+    /// * `subject` - The address whose reputation score to update.
+    /// * `delta` - The score change to apply (positive or negative).
+    /// * `reason` - A human-readable description of why the score changed.
+    ///   Must be ≤ 256 characters.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::ReasonTooLong`] if `reason` exceeds 256 characters.
+    /// Returns [`ContractError::RateLimitExceeded`] if the reporter has already
+    /// submitted a score for this subject within the last [`MIN_INTERVAL`] ledgers.
+    ///
+    /// # Panics
+    /// Panics with `"not a registered reporter"` if the caller is not registered.
     pub fn submit_score(
         env: Env,
         reporter: Address,
@@ -271,7 +353,14 @@ impl Reputation {
         Ok(())
     }
 
-    /// Get the reputation record for a subject.
+    /// Returns the aggregated reputation record for a subject.
+    ///
+    /// If the subject has no history, returns a zero-valued [`ReputationRecord`]
+    /// rather than an error, so callers can always safely read reputation.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address whose reputation record to fetch.
     pub fn get_reputation(env: Env, subject: Address) -> ReputationRecord {
         let key = Self::record_key(&subject);
         env.storage()
@@ -285,10 +374,24 @@ impl Reputation {
             })
     }
 
-    /// Get score history submitted by a specific reporter for a subject.
+    /// Returns paginated score history submitted by a specific reporter for a subject.
     ///
-    /// `offset` — number of entries to skip (0-based).
-    /// `limit`  — maximum number of entries to return (capped at 100).
+    /// Results are ordered oldest-first. The page size is capped at 100 entries
+    /// regardless of the `limit` argument.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address whose score history to retrieve.
+    /// * `reporter` - The reporter whose submissions to return.
+    /// * `offset` - Number of entries to skip from the beginning (0-based).
+    /// * `limit` - Maximum number of entries to return (capped at 100).
+    ///
+    /// # Returns
+    /// A [`Vec<ScoreEntry>`] containing the requested page of history.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::ReporterNotFound`] if `reporter` is not a
+    /// currently registered reporter.
     pub fn get_history(
         env: Env,
         subject: Address,
@@ -324,8 +427,22 @@ impl Reputation {
         Ok(page)
     }
 
-    /// Simple anti-sybil check: returns true if score >= threshold AND
-    /// at least `min_reporters` distinct active reporters have contributed.
+    /// Anti-sybil check with caller-supplied thresholds.
+    ///
+    /// Returns `true` only if the subject's accumulated score meets `min_score`
+    /// AND at least `min_reporters` currently-registered reporters have submitted
+    /// at least one score for the subject. Reporters removed via
+    /// [`Self::remove_reporter`] no longer count toward the active-reporter tally.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address to evaluate.
+    /// * `min_score` - Minimum accumulated score required to pass.
+    /// * `min_reporters` - Minimum number of distinct active reporters required.
+    ///
+    /// # Returns
+    /// `true` if both thresholds are met, `false` otherwise (including when no
+    /// reputation record exists for the subject).
     pub fn passes_sybil_check(
         env: Env,
         subject: Address,
@@ -357,12 +474,21 @@ impl Reputation {
         }
     }
 
-    /// Get the list of all registered reporters.
+    /// Returns the list of all currently registered reporter addresses.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_reporters_list(env: Env) -> Vec<Address> {
         Self::get_reporters(&env)
     }
 
-    /// Get storage usage statistics.
+    /// Returns storage usage statistics for the reputation contract.
+    ///
+    /// Includes the total number of unique subjects that have received scores
+    /// and the total number of score entries ever submitted.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_storage_stats(env: Env) -> ReputationStorageStats {
         ReputationStorageStats {
             total_subjects: env.storage().instance().get(&SUBJECT_CNT).unwrap_or(0),

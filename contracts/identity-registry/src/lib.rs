@@ -65,7 +65,18 @@ pub struct IdentityRegistry;
 impl IdentityRegistry {
     // ── Admin ─────────────────────────────────────────────────────────────────
 
-    /// Initialize the registry with an admin address.
+    /// Initializes the identity registry with an admin address.
+    ///
+    /// Must be called once before any other function. Subsequent calls will
+    /// return [`ContractError::AlreadyInitialized`].
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The address that will have admin privileges over this registry.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::AlreadyInitialized`] if the contract has already
+    /// been initialized.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN) {
             return Err(ContractError::AlreadyInitialized);
@@ -74,7 +85,15 @@ impl IdentityRegistry {
         Ok(())
     }
 
-    /// Transfer admin rights to a new address. Only the current admin can call this.
+    /// Transfers admin rights to a new address. Only the current admin can call this.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `current_admin` - The current admin address (must sign the transaction).
+    /// * `new_admin` - The address to transfer admin rights to.
+    ///
+    /// # Panics
+    /// Panics if `current_admin` does not match the stored admin address.
     pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
         current_admin.require_auth();
         let stored: Address = env
@@ -92,7 +111,15 @@ impl IdentityRegistry {
         );
     }
 
-    /// Upgrade the contract WASM. Only the admin can call this.
+    /// Upgrades the contract WASM to a new hash. Only the admin can call this.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The admin address (must sign the transaction).
+    /// * `new_wasm_hash` - The 32-byte hash of the new WASM binary to upgrade to.
+    ///
+    /// # Panics
+    /// Panics if `admin` does not match the stored admin address.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
         admin.require_auth();
         let stored: Address = env
@@ -108,7 +135,27 @@ impl IdentityRegistry {
 
     // ── DID management ────────────────────────────────────────────────────────
 
-    /// Create a new DID for the caller.
+    /// Creates a new DID document for the given controller address.
+    ///
+    /// The DID identifier is derived as `did:stellar:<bech32-address>` and stored
+    /// on-chain with the supplied metadata. The controller must sign the transaction.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `controller` - The Stellar address that will own and control this DID.
+    /// * `metadata` - Arbitrary key-value pairs to embed in the DID document.
+    ///   Keys must be ≤ 64 characters; values must be ≤ 256 characters.
+    ///
+    /// # Returns
+    /// The newly created DID string (e.g. `did:stellar:GABC…`).
+    ///
+    /// # Errors
+    /// Returns [`ContractError::MetadataTooLong`] if any key exceeds 64 characters
+    /// or any value exceeds 256 characters.
+    ///
+    /// # Panics
+    /// Panics with `"DID already exists for this address"` if a DID already exists
+    /// for the given controller.
     pub fn create_did(
         env: Env,
         controller: Address,
@@ -152,7 +199,25 @@ impl IdentityRegistry {
         Ok(did_id)
     }
 
-    /// Update metadata on an existing DID.
+    /// Updates the metadata on an existing DID document.
+    ///
+    /// Replaces the entire metadata map with the supplied values. The controller
+    /// must sign the transaction. Emits an `IDENTITY/updated` event containing
+    /// a SHA-256 fingerprint of the new metadata.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `controller` - The address that owns the DID (must sign the transaction).
+    /// * `metadata` - New key-value metadata to store. Must be non-empty.
+    ///   Keys must be ≤ 64 characters; values must be ≤ 256 characters.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::EmptyMetadata`] if `metadata` is empty.
+    /// Returns [`ContractError::MetadataTooLong`] if any key or value exceeds
+    /// the length limits.
+    ///
+    /// # Panics
+    /// Panics with `"DID not found"` if no DID exists for the given controller.
     pub fn update_did(
         env: Env,
         controller: Address,
@@ -188,7 +253,18 @@ impl IdentityRegistry {
         Ok(())
     }
 
-    /// Deactivate a DID (soft delete).
+    /// Deactivates a DID (soft delete). The DID record is retained on-chain but
+    /// marked inactive. Deactivated DIDs cannot be resolved and will return
+    /// [`ContractError::DidDeactivated`] on [`Self::resolve_did`].
+    ///
+    /// The controller must sign the transaction. Emits a `IDENTITY/deact` event.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `controller` - The address that owns the DID (must sign the transaction).
+    ///
+    /// # Panics
+    /// Panics with `"DID not found"` if no DID exists for the given controller.
     pub fn deactivate_did(env: Env, controller: Address) {
         controller.require_auth();
 
@@ -214,7 +290,17 @@ impl IdentityRegistry {
         );
     }
 
-    /// Resolve a DID document by controller address.
+    /// Resolves a DID document by controller address.
+    ///
+    /// Returns the full [`DidDocument`] if the DID exists and is active.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `controller` - The Stellar address whose DID document to fetch.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::DidNotFound`] if no DID exists for the address.
+    /// Returns [`ContractError::DidDeactivated`] if the DID has been deactivated.
     pub fn resolve_did(env: Env, controller: Address) -> Result<DidDocument, ContractError> {
         let key = Self::did_key(&env, &controller);
         let doc: DidDocument = env
@@ -228,7 +314,14 @@ impl IdentityRegistry {
         Ok(doc)
     }
 
-    /// Check whether an address has an active DID.
+    /// Returns `true` if the given address has an active DID, `false` otherwise.
+    ///
+    /// This is a lightweight read that does not return the full document.
+    /// Use [`Self::resolve_did`] to fetch the complete [`DidDocument`].
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `controller` - The Stellar address to check.
     pub fn has_active_did(env: Env, controller: Address) -> bool {
         let key = Self::did_key(&env, &controller);
         match env.storage().persistent().get::<_, DidDocument>(&key) {
@@ -237,12 +330,24 @@ impl IdentityRegistry {
         }
     }
 
-    /// Get the total count of active DIDs.
+    /// Returns the current count of active (non-deactivated) DIDs in the registry.
+    ///
+    /// This counter is incremented on [`Self::create_did`] and decremented on
+    /// [`Self::deactivate_did`].
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_did_count(env: Env) -> u32 {
         env.storage().instance().get(&DID_COUNT).unwrap_or(0)
     }
 
-    /// Get storage usage statistics.
+    /// Returns storage usage statistics for the identity registry.
+    ///
+    /// Includes the total number of DIDs ever created (`total_dids`) and the
+    /// current number of active DIDs (`active_dids`).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_storage_stats(env: Env) -> IdentityStorageStats {
         IdentityStorageStats {
             total_dids: env.storage().instance().get(&TOTAL_DIDS).unwrap_or(0),
