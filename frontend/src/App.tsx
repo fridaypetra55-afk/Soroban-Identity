@@ -7,6 +7,7 @@ import WalletButton from "./components/WalletButton";
 import { useWallet } from "./hooks/useWallet";
 import { useCredentialExpiryCheck } from "./hooks/useCredentialExpiryCheck";
 import { checkConnection, TESTNET_CONFIG } from "../../sdk/src/index";
+import { getAppConfig } from "./config";
 import type { Credential } from "../../sdk/src/types";
 
 type Tab = "identity" | "credentials";
@@ -39,7 +40,7 @@ export default function App() {
   // Check for verify query param on load
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const verifyParam = urlParams.get('verify');
+    const verifyParam = urlParams.get("verify");
     if (verifyParam) {
       setVerifyId(verifyParam);
       setTab("credentials");
@@ -49,7 +50,8 @@ export default function App() {
   // Check RPC connection health on load
   useEffect(() => {
     const checkRpcHealth = async () => {
-      const server = new SorobanRpc.Server(TESTNET_CONFIG.rpcUrl);
+      const config = getAppConfig();
+      const server = new SorobanRpc.Server(config.rpcUrl);
       const healthy = await checkConnection(server);
       setIsConnected(healthy);
     };
@@ -57,15 +59,32 @@ export default function App() {
   }, []);
 
   // Mock fetch — replace with CredentialClient.getCredentialsBySubject() when wired
-  const fetchCredentials = useCallback(async (_address: string): Promise<Credential[]> => {
-    await new Promise((r) => setTimeout(r, 200));
-    const now = Math.floor(Date.now() / 1000);
-    return [
-      { id: "abc003", credentialType: "Reputation", subject: _address, issuer: "GISSUER", claims: {}, claimsHash: "mockhash", signature: "", issuedAt: now - 100, expiresAt: now + 3 * 24 * 60 * 60, revoked: false },
-    ];
-  }, []);
+  const fetchCredentials = useCallback(
+    async (_address: string): Promise<Credential[]> => {
+      await new Promise((r) => setTimeout(r, 200));
+      const now = Math.floor(Date.now() / 1000);
+      return [
+        {
+          id: "abc003",
+          credentialType: "Reputation",
+          subject: _address,
+          issuer: "GISSUER",
+          claims: {},
+          claimsHash: "mockhash",
+          signature: "",
+          issuedAt: now - 100,
+          expiresAt: now + 3 * 24 * 60 * 60,
+          revoked: false,
+        },
+      ];
+    },
+    [],
+  );
 
-  const { notification, dismiss } = useCredentialExpiryCheck(wallet.publicKey, fetchCredentials);
+  const { notification, dismiss } = useCredentialExpiryCheck(
+    wallet.publicKey,
+    fetchCredentials,
+  );
 
   const toggleLang = () => {
     const next = i18n.language === "en" ? "es" : "en";
@@ -78,7 +97,16 @@ export default function App() {
       <header style={{ position: "relative" }}>
         <h1>{t("app.title")}</h1>
         <p>{t("app.subtitle")}</p>
-        <div style={{ position: "absolute", top: "1rem", right: 0, display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <div
+          style={{
+            position: "absolute",
+            top: "1rem",
+            right: 0,
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+          }}
+        >
           {isConnected !== null && (
             <div
               style={{
@@ -87,16 +115,32 @@ export default function App() {
                 gap: "0.5rem",
                 padding: "0.4rem 0.8rem",
                 borderRadius: "0.25rem",
-                backgroundColor: isConnected ? "var(--success-bg, #d4edda)" : "var(--danger-bg, #f8d7da)",
-                color: isConnected ? "var(--success-text, #155724)" : "var(--danger-text, #721c24)",
+                backgroundColor: isConnected
+                  ? "var(--success-bg, #d4edda)"
+                  : "var(--danger-bg, #f8d7da)",
+                color: isConnected
+                  ? "var(--success-text, #155724)"
+                  : "var(--danger-text, #721c24)",
                 fontSize: "0.85rem",
               }}
             >
-              <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", backgroundColor: isConnected ? "#28a745" : "#dc3545" }} />
+              <span
+                style={{
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: isConnected ? "#28a745" : "#dc3545",
+                }}
+              />
               {isConnected ? t("app.networkOnline") : t("app.networkOffline")}
             </div>
           )}
-          <button className="theme-toggle" onClick={toggleLang} aria-label="Switch language">
+          <button
+            className="theme-toggle"
+            onClick={toggleLang}
+            aria-label="Switch language"
+          >
             {i18n.language === "en" ? "ES" : "EN"}
           </button>
           <button
@@ -127,12 +171,19 @@ export default function App() {
           }}
         >
           <span>
-            ⚠ {notification.count} credential{notification.count > 1 ? "s" : ""} expiring within 7 days
+            ⚠ {notification.count} credential{notification.count > 1 ? "s" : ""}{" "}
+            expiring within 7 days
           </span>
           <button
             onClick={dismiss}
             aria-label="Dismiss notification"
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1rem", color: "inherit" }}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "1rem",
+              color: "inherit",
+            }}
           >
             ✕
           </button>
@@ -155,7 +206,9 @@ export default function App() {
       </div>
 
       {tab === "identity" && <IdentityPanel wallet={wallet} />}
-      {tab === "credentials" && <CredentialsPanel wallet={wallet} verifyId={verifyId} />}
+      {tab === "credentials" && (
+        <CredentialsPanel wallet={wallet} verifyId={verifyId} />
+      )}
     </div>
   );
 }

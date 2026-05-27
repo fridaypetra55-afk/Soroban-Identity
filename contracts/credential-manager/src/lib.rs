@@ -88,6 +88,18 @@ pub struct CredentialManager;
 impl CredentialManager {
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    /// Initializes the credential manager with an admin address.
+    ///
+    /// Must be called once before any other function. Subsequent calls will
+    /// return [`ContractError::AlreadyInitialized`].
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The address that will have admin privileges over this contract.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::AlreadyInitialized`] if the contract has already
+    /// been initialized.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN) {
             return Err(ContractError::AlreadyInitialized);
@@ -96,7 +108,15 @@ impl CredentialManager {
         Ok(())
     }
 
-    /// Transfer admin rights to a new address. Only the current admin can call this.
+    /// Transfers admin rights to a new address. Only the current admin can call this.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `current_admin` - The current admin address (must sign the transaction).
+    /// * `new_admin` - The address to transfer admin rights to.
+    ///
+    /// # Panics
+    /// Panics if `current_admin` does not match the stored admin address.
     pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
         current_admin.require_auth();
         let stored: Address = env
@@ -114,7 +134,15 @@ impl CredentialManager {
         );
     }
 
-    /// Upgrade the contract WASM. Only the admin can call this.
+    /// Upgrades the contract WASM to a new hash. Only the admin can call this.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The admin address (must sign the transaction).
+    /// * `new_wasm_hash` - The hash of the new WASM binary to upgrade to.
+    ///
+    /// # Panics
+    /// Panics if `admin` does not match the stored admin address.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: Bytes) {
         admin.require_auth();
         let stored: Address = env
@@ -128,7 +156,17 @@ impl CredentialManager {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    /// Register a trusted issuer (admin only).
+    /// Registers a trusted issuer (admin only).
+    ///
+    /// Registered issuers are the only addresses permitted to call
+    /// [`Self::issue_credential`]. The list is capped at `MAX_ISSUERS` (100).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `issuer` - The address to register as a trusted issuer.
+    ///
+    /// # Panics
+    /// Panics with `"MaxIssuersReached"` if the issuer cap has been reached.
     pub fn add_issuer(env: Env, issuer: Address) {
         Self::require_admin(&env);
         let mut issuers = Self::get_issuers_internal(&env);
@@ -143,7 +181,14 @@ impl CredentialManager {
         }
     }
 
-    /// Remove a trusted issuer (admin only).
+    /// Removes a trusted issuer (admin only).
+    ///
+    /// After removal the address can no longer issue new credentials. Existing
+    /// credentials issued by this address are unaffected.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `issuer` - The issuer address to remove.
     pub fn remove_issuer(env: Env, issuer: Address) {
         Self::require_admin(&env);
         let issuers = Self::get_issuers_internal(&env);
@@ -158,9 +203,35 @@ impl CredentialManager {
 
     // ── Credential lifecycle ──────────────────────────────────────────────────
 
-    /// Issue a credential to a subject. Caller must be a registered issuer.
-    /// Returns CredentialAlreadyExists if the same issuer+subject+type combination
-    /// has already been issued and not revoked.
+    /// Issues a verifiable credential to a subject. Caller must be a registered issuer.
+    ///
+    /// The credential ID is derived deterministically as
+    /// `sha256(issuer_xdr || subject_xdr || type_tag)`, so the same issuer cannot
+    /// issue the same credential type to the same subject twice unless the previous
+    /// one has been revoked.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `issuer` - The registered issuer address (must sign the transaction).
+    /// * `subject` - The address receiving the credential.
+    /// * `credential_type` - The type of credential being issued ([`CredentialType`]).
+    /// * `claims` - Arbitrary key-value claims to embed in the credential.
+    /// * `claims_hash` - SHA-256 hash of the off-chain claims payload (32 bytes).
+    ///   Stored on-chain for privacy-preserving verification.
+    /// * `signature` - Issuer's signature over the credential data (64 bytes).
+    /// * `expires_at` - Unix timestamp after which the credential is invalid.
+    ///   Pass `0` for no expiry.
+    ///
+    /// # Returns
+    /// The 32-byte credential ID as [`BytesN<32>`].
+    ///
+    /// # Errors
+    /// Returns [`ContractError::CredentialAlreadyExists`] if a non-revoked credential
+    /// with the same issuer + subject + type already exists.
+    ///
+    /// # Panics
+    /// Panics with `"CredentialAlreadyExpired"` if `expires_at` is in the past.
+    /// Panics with `"not a registered issuer"` if the caller is not registered.
     pub fn issue_credential(
         env: Env,
         issuer: Address,
@@ -231,7 +302,21 @@ impl CredentialManager {
         Ok(id)
     }
 
-    /// Revoke a credential. Only the original issuer can revoke.
+    /// Revokes a credential. Only the original issuer can revoke their own credential.
+    ///
+    /// Revoked credentials return `false` from [`Self::verify_credential`] and
+    /// are excluded from TTL extension so they expire naturally from storage.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `issuer` - The issuer address (must sign the transaction).
+    /// * `credential_id` - The 32-byte ID of the credential to revoke.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::CredentialNotFound`] if no credential with the
+    /// given ID exists.
+    /// Returns [`ContractError::UnauthorizedIssuer`] if the caller is not the
+    /// original issuer of the credential.
     pub fn revoke_credential(
         env: Env,
         issuer: Address,
@@ -262,7 +347,19 @@ impl CredentialManager {
         Ok(())
     }
 
-    /// Verify a credential is valid (not revoked, not expired).
+    /// Verifies that a credential is valid — not revoked and not expired.
+    ///
+    /// Uses the on-chain ledger timestamp for expiry checks, preventing
+    /// caller-supplied time spoofing. Bumps the storage TTL on success so
+    /// active credentials remain accessible.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `credential_id` - The 32-byte ID of the credential to verify.
+    ///
+    /// # Returns
+    /// `true` if the credential exists, is not revoked, and has not expired.
+    /// `false` otherwise (including if the credential does not exist).
     pub fn verify_credential(env: Env, credential_id: BytesN<32>) -> bool {
         let key = Self::cred_key(&credential_id);
         match env.storage().persistent().get::<_, Credential>(&key) {
@@ -283,7 +380,17 @@ impl CredentialManager {
         }
     }
 
-    /// Get a credential by ID.
+    /// Retrieves a credential by its ID.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `credential_id` - The 32-byte ID of the credential to fetch.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::CredentialNotFound`] if no credential with the
+    /// given ID exists.
+    /// Returns [`ContractError::CredentialRevoked`] if the credential has been
+    /// revoked.
     pub fn get_credential(
         env: Env,
         credential_id: BytesN<32>,
@@ -300,7 +407,18 @@ impl CredentialManager {
         }
     }
 
-    /// Verify that the supplied hash matches the stored claims_hash for a credential.
+    /// Verifies that the supplied hash matches the stored `claims_hash` for a credential.
+    ///
+    /// Allows off-chain verifiers to confirm that a claims payload they hold
+    /// corresponds to the on-chain hash without revealing the full claims.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `credential_id` - The 32-byte ID of the credential to check.
+    /// * `hash` - The SHA-256 hash to compare against the stored `claims_hash`.
+    ///
+    /// # Returns
+    /// `true` if the credential exists and the hashes match, `false` otherwise.
     pub fn verify_claims_hash(env: Env, credential_id: BytesN<32>, hash: BytesN<32>) -> bool {
         let key = Self::cred_key(&credential_id);
         match env.storage().persistent().get::<_, Credential>(&key) {
@@ -309,23 +427,45 @@ impl CredentialManager {
         }
     }
 
-    /// List all credential IDs for a subject.
+    /// Returns all credential IDs issued to a subject address.
+    ///
+    /// The list includes both active and revoked credential IDs. Use
+    /// [`Self::verify_credential`] to check the status of each ID.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address whose credential IDs to retrieve.
     pub fn get_subject_credentials(env: Env, subject: Address) -> Vec<BytesN<32>> {
         Self::fetch_subject_creds(&env, &subject)
     }
 
-    /// Get the total number of credentials issued to a subject.
+    /// Returns the total number of credentials ever issued to a subject.
+    ///
+    /// This counter is incremented on each successful [`Self::issue_credential`]
+    /// call and is not decremented on revocation.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `subject` - The address whose credential count to retrieve.
     pub fn get_credential_count(env: Env, subject: Address) -> u32 {
         let cnt_key = (CRED_CNT, subject);
         env.storage().persistent().get(&cnt_key).unwrap_or(0)
     }
 
-    /// Get the list of all registered issuers.
+    /// Returns the list of all currently registered issuer addresses.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_issuers(env: Env) -> Vec<Address> {
         Self::get_issuers_internal(&env)
     }
 
-    /// Get storage usage statistics.
+    /// Returns storage usage statistics for the credential manager.
+    ///
+    /// Includes total, revoked, and active credential counts.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
     pub fn get_storage_stats(env: Env) -> CredentialStorageStats {
         let revoked: u32 = env.storage().instance().get(&REVOKED_CNT).unwrap_or(0);
         // total is tracked via per-subject counters; use revoked_cnt as a proxy for stats

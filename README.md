@@ -244,6 +244,35 @@ cd frontend && npm install && npm run dev
 cd sdk && npm install && npm run build
 ```
 
+### Frontend Environment Configuration
+
+The frontend uses environment variables for configuration. Copy `.env.example` to `.env` and fill in the contract IDs after deployment:
+
+```bash
+cd frontend
+cp .env.example .env
+```
+
+Edit `.env` with your deployment values:
+
+```env
+VITE_RPC_URL=https://soroban-testnet.stellar.org
+VITE_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+VITE_IDENTITY_REGISTRY_ID=YOUR_REGISTRY_CONTRACT_ID
+VITE_CREDENTIAL_MANAGER_ID=YOUR_CREDENTIAL_CONTRACT_ID
+VITE_REPUTATION_ID=YOUR_REPUTATION_CONTRACT_ID
+```
+
+**Environment Variables:**
+
+- `VITE_RPC_URL` — Soroban RPC endpoint URL (default: `https://soroban-testnet.stellar.org`)
+- `VITE_NETWORK_PASSPHRASE` — Network passphrase for transaction signing
+- `VITE_IDENTITY_REGISTRY_ID` — Identity registry contract ID (required)
+- `VITE_CREDENTIAL_MANAGER_ID` — Credential manager contract ID (required)
+- `VITE_REPUTATION_ID` — Reputation contract ID (required)
+
+**Note:** `.env` is git-ignored. Only commit `.env.example` to the repository.
+
 ### Deployment Configuration
 
 The `scripts/deploy.sh` script supports configurable network and RPC endpoint via environment variables:
