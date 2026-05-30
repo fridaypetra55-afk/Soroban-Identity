@@ -1,5 +1,6 @@
 import { useState, useReducer } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { StrKey } from '@stellar/stellar-sdk';
 import type { WalletState } from '../hooks/useWallet';
 import type { ReputationRecord } from '../../../sdk/src/reputation';
 import type { ScoreHistoryEntry } from '../../../sdk/src/reputation';
@@ -75,16 +76,28 @@ export default function IdentityPanel() {
   };
 
   const handleResolve = async () => {
-    if (!resolveAddress.trim()) return;
-    addAddress(resolveAddress);
+    const address = resolveAddress.trim();
+    if (!address) return;
+    
+    // Validate Stellar address format
+    if (!StrKey.isValidEd25519PublicKey(address)) {
+      dispatch({ 
+        type: 'FETCH_ERROR', 
+        message: 'Invalid Stellar address format. Address must start with "G" and be 56 characters long.',
+        errorType: 'contract'
+      });
+      return;
+    }
+    
+    addAddress(address);
     dispatch({ type: 'FETCH_START' });
     setSybilResult(null);
     try {
       // TODO: wire IdentityClient.resolveDid() from SDK
       await new Promise((r) => setTimeout(r, 800));
       const mock: DidDocument = {
-        id: `did:stellar:${resolveAddress}`,
-        controller: resolveAddress,
+        id: `did:stellar:${address}`,
+        controller: address,
         metadata: {},
         createdAt: Math.floor(Date.now() / 1000),
         updatedAt: Math.floor(Date.now() / 1000),
@@ -97,7 +110,7 @@ export default function IdentityPanel() {
         // TODO: wire ReputationClient.getReputation() from SDK
         await new Promise((r) => setTimeout(r, 600));
         resolvedRep = {
-          subject: resolveAddress,
+          subject: address,
           score: 42,
           reporterCount: 3,
           updatedAt: Math.floor(Date.now() / 1000),
@@ -105,10 +118,10 @@ export default function IdentityPanel() {
         // TODO: wire ReputationClient.getScoreHistory() from SDK
         const now = Math.floor(Date.now() / 1000);
         resolvedHistory = [
-          { reporter: resolveAddress, delta: 10, reason: "KYC verified", submittedAt: now - 30 * 86400 },
-          { reporter: resolveAddress, delta: -5, reason: "Dispute", submittedAt: now - 20 * 86400 },
-          { reporter: resolveAddress, delta: 20, reason: "Achievement", submittedAt: now - 10 * 86400 },
-          { reporter: resolveAddress, delta: 17, reason: "Referral", submittedAt: now - 3 * 86400 },
+          { reporter: address, delta: 10, reason: "KYC verified", submittedAt: now - 30 * 86400 },
+          { reporter: address, delta: -5, reason: "Dispute", submittedAt: now - 20 * 86400 },
+          { reporter: address, delta: 20, reason: "Achievement", submittedAt: now - 10 * 86400 },
+          { reporter: address, delta: 17, reason: "Referral", submittedAt: now - 3 * 86400 },
         ];
       } catch {
         // reputation fetch failed — proceed with null
