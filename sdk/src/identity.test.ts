@@ -43,7 +43,8 @@ vi.mock('@stellar/stellar-sdk', () => ({
   nativeToScVal: vi.fn().mockReturnValue({}),
   scValToNative: vi.fn().mockImplementation((v) => v),
   StrKey: {
-    isValidEd25519PublicKey: (addr: string) => typeof addr === 'string' && addr.startsWith('G'),
+    isValidEd25519PublicKey: (addr: string) =>
+      typeof addr === 'string' && addr.startsWith('G'),
   },
 }));
 
@@ -91,7 +92,9 @@ describe('IdentityClient', () => {
     mockIsSimulationError.mockReturnValue(true);
     mockSimulateTransaction.mockResolvedValue({ error: 'Contract error' });
 
-    await expect(client.resolveDid('GABC')).rejects.toThrow('Simulation failed');
+    await expect(client.resolveDid('GABC')).rejects.toThrow(
+      'Simulation failed'
+    );
   });
 
   it('hasActiveDid — returns true for active DID', async () => {
@@ -117,17 +120,18 @@ describe('IdentityClient', () => {
   it('createDid — happy path returns the new DID string', async () => {
     const keypair = { publicKey: () => 'GABC', sign: vi.fn() } as any;
 
-    const result = await client.createDid(keypair, { service: 'https://example.com' });
+    const result = await client.createDid(keypair, {
+      service: 'https://example.com',
+    });
 
     expect(result.did).toBe('did:stellar:GABC');
   });
 
   it('createDid — throws descriptive error when DID already exists', async () => {
-    const server = (client as any).server;
-    server.getTransaction.mockResolvedValueOnce({
-      status: 'FAILED',
-      resultXdr: 'DID already exists for this address',
-    });
+    const utils = await import('./utils');
+    vi.spyOn(utils, 'pollTransactionStatus').mockRejectedValueOnce(
+      new Error('DID already exists for this address')
+    );
 
     const keypair = { publicKey: () => 'GABC', sign: vi.fn() } as any;
 
@@ -137,7 +141,9 @@ describe('IdentityClient', () => {
   });
 
   it('resolveDid — throws InvalidAddress for an invalid address', async () => {
-    await expect(client.resolveDid('not-valid')).rejects.toThrow('InvalidAddress');
+    await expect(client.resolveDid('not-valid')).rejects.toThrow(
+      'InvalidAddress'
+    );
   });
 
   it('hasActiveDid — throws InvalidAddress for an invalid address', async () => {

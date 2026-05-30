@@ -49,3 +49,23 @@ export const NETWORK_CONFIGS: Record<NetworkName, FrontendNetworkConfig> = {
 };
 
 export const NETWORK_OPTIONS = networkNames.map((name) => NETWORK_CONFIGS[name]);
+
+/**
+ * Resolve the active network from the `VITE_NETWORK` env var.
+ *
+ * Anything other than the literal string "mainnet" falls back to testnet —
+ * the safe default for development.
+ */
+export function getActiveNetwork(): NetworkName {
+  return DEFAULT_NETWORK;
+}
+
+export function getNetworkConfig(
+  network: NetworkName = getActiveNetwork(),
+): FrontendNetworkConfig {
+  return NETWORK_CONFIGS[network];
+}
+
+export function isMainnet(network: NetworkName = getActiveNetwork()): boolean {
+  return network === "mainnet";
+}

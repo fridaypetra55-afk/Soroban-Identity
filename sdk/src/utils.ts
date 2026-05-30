@@ -1,4 +1,5 @@
-import { StrKey, SorobanRpc } from "@stellar/stellar-sdk";
+import { StrKey, SorobanRpc, hash } from "@stellar/stellar-sdk";
+import type { CredentialType } from "./types";
 
 /**
  * Retries an async function with exponential backoff on transient network errors.
@@ -80,4 +81,35 @@ export function validateStellarAddress(address: string): void {
   if (!StrKey.isValidEd25519PublicKey(address)) {
     throw new Error(`InvalidAddress: "${address}" is not a valid Stellar address`);
   }
+}
+
+/**
+ * Checks if the RPC connection is healthy.
+ * Returns false on any network or server error without throwing.
+ *
+ * @param server - SorobanRpc.Server instance
+ * @returns Promise<boolean> - true if connection is healthy, false otherwise
+ */
+export async function checkConnection(server: SorobanRpc.Server): Promise<boolean> {
+  try {
+    await server.getLatestLedger();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deterministically computes a credential ID from issuer, subject, and type.
+ * Mirrors the derivation used by the credential-manager contract.
+ *
+ * @returns 64-character hex string (32-byte SHA-256 hash)
+ */
+export function computeCredentialId(
+  issuer: string,
+  subject: string,
+  credentialType: CredentialType
+): string {
+  const input = [issuer, subject, credentialType].join(":");
+  return Buffer.from(hash(Buffer.from(input))).toString("hex");
 }

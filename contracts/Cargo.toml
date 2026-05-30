@@ -24,3 +24,9 @@ credential-manager = { path = "credential-manager" }
 identity-registry = { path = "identity-registry" }
 reputation = { path = "reputation" }
 soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -9,16 +9,48 @@ import {
 } from "@stellar/stellar-sdk";
 import type { CallOptions, DidDocument, IdentityStorageStats, SorobanIdentityConfig, WriteResult } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus } from "./utils";
+import { ContractError } from "./errors";
+import { IDENTITY_REGISTRY_ERRORS } from "./error-codes";
+import { BaseClient } from "./base-client";
 
-export class IdentityClient {
-  private server: SorobanRpc.Server;
-  private contract: Contract;
-  private config: SorobanIdentityConfig;
+// Dummy address used for lightweight initialization probes
+const PROBE_ADDRESS = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
+export class IdentityClient extends BaseClient {
   constructor(config: SorobanIdentityConfig) {
-    this.config = config;
-    this.server = new SorobanRpc.Server(config.rpcUrl);
-    this.contract = new Contract(config.identityRegistryId);
+    super(config, config.identityRegistryId);
+  }
+
+  /**
+   * Returns true if the identity-registry contract has been initialized.
+   * Uses a lightweight read call; returns false on any contract-level error.
+   */
+  async isInitialized(): Promise<boolean> {
+    try {
+      const account = await this.server.getAccount(PROBE_ADDRESS);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "has_active_did",
+            nativeToScVal(PROBE_ADDRESS, { type: "address" })
+          )
+        )
+        .setTimeout(10)
+        .build();
+      const result = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        const err: string = (result as { error: string }).error ?? "";
+        if (err.includes("not initialized") || err.includes("NotInitialized") || err.includes("#0")) {
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -150,6 +182,8 @@ export class IdentityClient {
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
       const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, IDENTITY_REGISTRY_ERRORS);
+      if (contractErr) throw contractErr;
       if (errMsg.includes("DidDeactivated")) {
         throw new Error(`DID for address ${controllerAddress} has been deactivated.`);
       }
@@ -214,6 +248,9 @@ export class IdentityClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, IDENTITY_REGISTRY_ERRORS);
+      if (contractErr) throw contractErr;
       throw new Error("Failed to get DID count");
     }
 
@@ -277,7 +314,10 @@ export class IdentityClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation failed: ${result.error}`);
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, IDENTITY_REGISTRY_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     return scValToNative(

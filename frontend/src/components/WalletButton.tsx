@@ -1,15 +1,9 @@
 import { useState } from "react";
 import type { WalletState, WalletType } from "../hooks/useWallet";
+import { useWalletContext } from "../context/WalletContext";
 
-interface Props {
-  wallet: WalletState & {
-    connect: (walletType?: WalletType) => void;
-    disconnect: () => void;
-  };
-}
-
-export default function WalletButton({ wallet }: Props) {
-  const { publicKey, connected, connecting, txLoading, walletType, error, connect, disconnect } = wallet;
+export default function WalletButton() {
+  const wallet = useWalletContext();
   const [showPicker, setShowPicker] = useState(false);
 
   const short = (key: string) => `${key.slice(0, 4)}…${key.slice(-4)}`;

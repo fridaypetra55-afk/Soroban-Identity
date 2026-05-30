@@ -1,17 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useReducer } from "react";
 import type { CredentialType } from "../../../sdk/src/types";
-import type { WalletState } from "../hooks/useWallet";
-import type { FrontendNetworkConfig } from "../network";
 import { validateStellarAddress } from "../../../sdk/src/utils";
 import SkeletonCard from "./SkeletonCard";
-
-interface Props {
-  wallet: WalletState & {
-    connect: () => void;
-    signTransaction: (xdr: string) => Promise<string>;
-  };
-  networkConfig: FrontendNetworkConfig;
-}
+import { formatTimestamp } from "../utils/formatDate";
+import { useWalletContext } from "../context/WalletContext";
 
 type VerifyState =
   | "idle"
@@ -27,8 +19,12 @@ type DemoCredential = {
   id: string;
   credentialType: CredentialType;
   subject: string;
-  expiresAt: number;
+  issuer: string;
   claims: Record<string, string>;
+  claimsHash: string;
+  signature: string;
+  issuedAt: number;
+  expiresAt: number;
   revoked: boolean;
 };
 
@@ -101,11 +97,12 @@ function getStatusSortRank(credential: DemoCredential): number {
 
 // Mock credentials for demonstration — replace with SDK data when wired
 const MOCK_CREDENTIALS: DemoCredential[] = [
-  { id: "abc001", credentialType: "Kyc", subject: "GABC…", expiresAt: 0, claims: { name: "John Doe", country: "US" }, revoked: false },
-  { id: "abc002", credentialType: "Kyc", subject: "GABC…", expiresAt: Math.floor((Date.now() + 12 * 24 * 60 * 60 * 1000) / 1000), claims: { verified: "true" }, revoked: false },
-  { id: "abc003", credentialType: "Reputation", subject: "GABC…", expiresAt: Math.floor((Date.now() + 3 * 24 * 60 * 60 * 1000) / 1000), claims: { score: "850", level: "gold" }, revoked: false },
-  { id: "abc004", credentialType: "Achievement", subject: "GABC…", expiresAt: Math.floor((Date.now() - 5 * 24 * 60 * 60 * 1000) / 1000), claims: {}, revoked: false },
-  { id: "abc005", credentialType: "Custom", subject: "GABC…", expiresAt: Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000), claims: { custom_field: "custom_value" }, revoked: true },
+  { id: "abc001", credentialType: "Kyc", subject: "GABC…", issuer: "GISSUER", claims: { name: "John Doe", country: "US" }, claimsHash: "hash1", signature: "sig1", issuedAt: Math.floor(Date.now() / 1000) - 1000, expiresAt: 0, revoked: false },
+  { id: "abc002", credentialType: "Kyc", subject: "GABC…", issuer: "GISSUER", claims: { verified: "true" }, claimsHash: "hash2", signature: "sig2", issuedAt: Math.floor(Date.now() / 1000) - 1000, expiresAt: Math.floor((Date.now() + 12 * 24 * 60 * 60 * 1000) / 1000), revoked: false },
+  { id: "abc003", credentialType: "Reputation", subject: "GABC…", issuer: "GISSUER", claims: { score: "850", level: "gold" }, claimsHash: "hash3", signature: "sig3", issuedAt: Math.floor(Date.now() / 1000) - 1000, expiresAt: Math.floor((Date.now() + 3 * 24 * 60 * 60 * 1000) / 1000), revoked: false },
+  { id: "abc004", credentialType: "Achievement", subject: "GABC…", issuer: "GISSUER", claims: {}, claimsHash: "hash4", signature: "sig4", issuedAt: Math.floor(Date.now() / 1000) - 1000, expiresAt: Math.floor((Date.now() - 5 * 24 * 60 * 60 * 1000) / 1000), revoked: false },
+  { id: "abc005", credentialType: "Custom", subject: "GABC…", issuer: "GISSUER", claims: { custom_field: "custom_value" }, claimsHash: "hash5", signature: "sig5", issuedAt: Math.floor(Date.now() / 1000) - 1000, expiresAt: Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000), revoked: true },
+  { id: "abc006", credentialType: "Kyc", subject: "GABC…", issuer: "GISSUER", claims: { reason: "compromised" }, claimsHash: "hash6", signature: "sig6", issuedAt: Math.floor(Date.now() / 1000) - 2000, expiresAt: Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000), revoked: true },
 ];
 
 const FILTER_OPTIONS: FilterType[] = ["All", "Kyc", "Reputation", "Achievement", "Custom"];
@@ -122,7 +119,35 @@ function countByType(creds: DemoCredential[], type: FilterType): number {
   return creds.filter((c) => c.credentialType === type).length;
 }
 
-export default function CredentialsPanel({ wallet, networkConfig }: Props) {
+type CredentialState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; credentials: DemoCredential[]; searchedAddress: string }
+  | { status: 'error'; message: string };
+
+type CredentialAction =
+  | { type: 'FETCH_START' }
+  | { type: 'FETCH_SUCCESS'; credentials: DemoCredential[]; searchedAddress: string }
+  | { type: 'FETCH_ERROR'; message: string }
+  | { type: 'RESET' };
+
+function credentialReducer(_state: CredentialState, action: CredentialAction): CredentialState {
+  switch (action.type) {
+    case 'FETCH_START': return { status: 'loading' };
+    case 'FETCH_SUCCESS': return { status: 'success', credentials: action.credentials, searchedAddress: action.searchedAddress };
+    case 'FETCH_ERROR': return { status: 'error', message: action.message };
+    case 'RESET': return { status: 'idle' };
+  }
+}
+
+export default function CredentialsPanel({ verifyId }: { verifyId?: string | null }) {
+  const wallet = useWalletContext();
+  const [credentialState, dispatchCredential] = useReducer(credentialReducer, { status: 'idle' });
+
+  const fetchedCredentials = credentialState.status === 'success' ? credentialState.credentials : null;
+  const fetching = credentialState.status === 'loading';
+  const searchedAddress = credentialState.status === 'success' ? credentialState.searchedAddress : null;
+
   const [credId, setCredId] = useState("");
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
   const [verifying, setVerifying] = useState(false);
@@ -140,9 +165,28 @@ export default function CredentialsPanel({ wallet, networkConfig }: Props) {
   const [checkingIssuer, setCheckingIssuer] = useState(false);
 
   const [searchAddress, setSearchAddress] = useState("");
-  const [searchedAddress, setSearchedAddress] = useState<string | null>(null);
-  const [fetchedCredentials, setFetchedCredentials] = useState<DemoCredential[] | null>(null);
-  const [fetching, setFetching] = useState(false);
+
+  const handleVerify = async () => {
+    if (!credId.trim()) return;
+    setVerifying(true);
+    setVerifyState("idle");
+    try {
+      // TODO: wire CredentialClient.verifyCredential() from SDK
+      await new Promise((r) => setTimeout(r, 800));
+      const mockResult = credId.startsWith("0")
+        ? { valid: false as const, reason: "revoked" as const }
+        : { valid: true as const };
+      if (mockResult.valid) {
+        setVerifyState("valid");
+      } else {
+        setVerifyState(mockResult.reason);
+      }
+    } catch {
+      setVerifyState("invalid");
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   // Check if connected wallet is a registered issuer
   useEffect(() => {
@@ -169,23 +213,29 @@ export default function CredentialsPanel({ wallet, networkConfig }: Props) {
     checkIssuerStatus();
   }, [wallet.connected, wallet.publicKey]);
 
+  // Handle deep link verification
+  useEffect(() => {
+    if (verifyId) {
+      setCredId(verifyId);
+      // Trigger verification after a short delay to ensure state is set
+      setTimeout(() => {
+        handleVerify();
+      }, 100);
+    }
+  }, [verifyId]);
+
   const handleSearch = async () => {
     const addr = searchAddress.trim();
     if (!addr) return;
-    setFetching(true);
-    setFetchedCredentials(null);
-    setSearchedAddress(addr);
+    dispatchCredential({ type: 'FETCH_START' });
     try {
       // TODO: wire CredentialClient.getCredentialsBySubject() from SDK
       // const credentials = new CredentialClient(networkConfig);
       await new Promise((r) => setTimeout(r, 600));
-      // Mock: return credentials only for addresses that match existing mock subjects
       const results = MOCK_CREDENTIALS.filter((c) => c.subject === addr);
-      setFetchedCredentials(results);
-    } catch {
-      setFetchedCredentials([]);
-    } finally {
-      setFetching(false);
+      dispatchCredential({ type: 'FETCH_SUCCESS', credentials: results, searchedAddress: addr });
+    } catch (e: unknown) {
+      dispatchCredential({ type: 'FETCH_ERROR', message: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -248,28 +298,6 @@ export default function CredentialsPanel({ wallet, networkConfig }: Props) {
   const sortedCredentials = [...filteredCredentials].sort(
     (a, b) => getStatusSortRank(a) - getStatusSortRank(b)
   );
-
-  const handleVerify = async () => {
-    if (!credId.trim()) return;
-    setVerifying(true);
-    setVerifyState("idle");
-    try {
-      // TODO: wire CredentialClient.verifyCredential() from SDK
-      await new Promise((r) => setTimeout(r, 800));
-      const mockResult = credId.startsWith("0")
-        ? { valid: false as const, reason: "revoked" as const }
-        : { valid: true as const };
-      if (mockResult.valid) {
-        setVerifyState("valid");
-      } else {
-        setVerifyState(mockResult.reason);
-      }
-    } catch {
-      setVerifyState("invalid");
-    } finally {
-      setVerifying(false);
-    }
-  };
 
   const handleIssue = async () => {
     if (!wallet.connected) return;
@@ -404,16 +432,53 @@ export default function CredentialsPanel({ wallet, networkConfig }: Props) {
                   </span>
                   <span style={{ fontFamily: "monospace", color: "var(--text-muted)" }}>{cred.id}</span>
                   <span className="badge badge-green">{cred.credentialType}</span>
-                  <span className={getStatusBadgeClass(status)}>
+                  <span
+                    className={getStatusBadgeClass(status)}
+                    aria-label={`Credential status: ${getStatusLabel(status)}`}
+                  >
                     {getStatusLabel(status)}
                   </span>
                   <span style={getExpiryStyle(cred.expiresAt)}>{formatExpiry(cred.expiresAt)}</span>
-                  <span style={{ marginLeft: "auto", fontSize: "1rem" }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const url = new URL(window.location.href);
+                      url.searchParams.set('verify', cred.id);
+                      navigator.clipboard.writeText(url.toString()).then(() => {
+                        alert('Share link copied to clipboard!');
+                      }).catch(() => {
+                        alert('Failed to copy link');
+                      });
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "1rem",
+                      color: "var(--accent-light)",
+                      marginLeft: "auto",
+                      marginRight: "0.5rem",
+                    }}
+                    title="Copy share link"
+                  >
+                    🔗
+                  </button>
+                  <span style={{ fontSize: "1rem" }}>
                     {expandedCredId === cred.id ? "▼" : "▶"}
                   </span>
                 </button>
                 {expandedCredId === cred.id && (
                   <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid var(--border-input)", background: "var(--card-bg-accent)" }}>
+                    <dl style={{ margin: "0 0 0.75rem", fontSize: "0.8rem" }}>
+                      <div style={{ display: "flex", gap: "1rem", marginBottom: "0.25rem" }}>
+                        <dt style={{ fontWeight: 600, color: "var(--text-muted)", minWidth: "120px" }}>Issued</dt>
+                        <dd style={{ margin: 0, color: "var(--text-muted)" }}>{formatTimestamp(cred.issuedAt)}</dd>
+                      </div>
+                      <div style={{ display: "flex", gap: "1rem", marginBottom: "0.5rem" }}>
+                        <dt style={{ fontWeight: 600, color: "var(--text-muted)", minWidth: "120px" }}>Expires</dt>
+                        <dd style={{ margin: 0, ...getExpiryStyle(cred.expiresAt) }}>{formatTimestamp(cred.expiresAt)}</dd>
+                      </div>
+                    </dl>
                     {Object.keys(cred.claims).length > 0 ? (
                       <dl style={{ margin: 0, fontSize: "0.85rem" }}>
                         {Object.entries(cred.claims).map(([key, value]) => (

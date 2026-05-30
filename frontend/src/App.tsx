@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { SorobanRpc } from "@stellar/stellar-sdk";
 import IdentityPanel from "./components/IdentityPanel";
 import CredentialsPanel from "./components/CredentialsPanel";
 import WalletButton from "./components/WalletButton";
@@ -9,8 +10,11 @@ import {
   DEFAULT_NETWORK,
   NETWORK_CONFIGS,
   NETWORK_OPTIONS,
+  isMainnet,
   type NetworkName,
 } from "./network";
+import { checkConnection, IdentityClient, CredentialClient, ReputationClient } from "../../sdk/src/index";
+import { getAppConfig } from "./config";
 import type { Credential } from "../../sdk/src/types";
 
 type Tab = "identity" | "credentials";
@@ -35,21 +39,85 @@ function useDarkMode(): [boolean, () => void] {
 export default function App() {
   const [tab, setTab] = useState<Tab>("identity");
   const [activeNetwork, setActiveNetwork] = useState<NetworkName>(DEFAULT_NETWORK);
+  const [verifyId, setVerifyId] = useState<string | null>(null);
   const networkConfig = NETWORK_CONFIGS[activeNetwork];
   const wallet = useWallet(networkConfig);
   const [isDark, toggleDark] = useDarkMode();
   const { t, i18n } = useTranslation();
+  const [isConnected, setIsConnected] = useState<boolean | null>(null);
+  const [uninitializedContracts, setUninitializedContracts] = useState<string[]>([]);
 
-  // Mock fetch — replace with CredentialClient.getCredentialsBySubject() when wired
-  const fetchCredentials = useCallback(async (_address: string): Promise<Credential[]> => {
-    await new Promise((r) => setTimeout(r, 200));
-    const now = Math.floor(Date.now() / 1000);
-    return [
-      { id: "abc003", credentialType: "Reputation", subject: _address, issuer: "GISSUER", claims: {}, claimsHash: "00".repeat(32), signature: "", issuedAt: now - 100, expiresAt: now + 3 * 24 * 60 * 60, revoked: false },
-    ];
+  // Check for verify query param on load
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const verifyParam = urlParams.get("verify");
+    if (verifyParam) {
+      setVerifyId(verifyParam);
+      setTab("credentials");
+    }
   }, []);
 
-  const { notification, dismiss } = useCredentialExpiryCheck(wallet.publicKey, fetchCredentials);
+  const onMainnet = isMainnet(activeNetwork);
+
+  // Check RPC connection health on load
+  useEffect(() => {
+    const checkRpcHealth = async () => {
+      const config = getAppConfig();
+      const server = new SorobanRpc.Server(config.rpcUrl);
+      const healthy = await checkConnection(server);
+      setIsConnected(healthy);
+    };
+    checkRpcHealth();
+  }, [networkConfig.rpcUrl]);
+
+  // Check contract initialization on load
+  useEffect(() => {
+    const checkInit = async () => {
+      const config = getAppConfig();
+      const identity = new IdentityClient(config);
+      const credentials = new CredentialClient(config);
+      const reputation = new ReputationClient(config);
+      const [idOk, credOk, repOk] = await Promise.all([
+        identity.isInitialized(),
+        credentials.isInitialized(),
+        reputation.isInitialized(),
+      ]);
+      const uninitialized: string[] = [];
+      if (!idOk) uninitialized.push("Identity Registry");
+      if (!credOk) uninitialized.push("Credential Manager");
+      if (!repOk) uninitialized.push("Reputation");
+      setUninitializedContracts(uninitialized);
+    };
+    checkInit();
+  }, [networkConfig.rpcUrl]);
+
+  // Mock fetch — replace with CredentialClient.getCredentialsBySubject() when wired
+  const fetchCredentials = useCallback(
+    async (_address: string): Promise<Credential[]> => {
+      await new Promise((r) => setTimeout(r, 200));
+      const now = Math.floor(Date.now() / 1000);
+      return [
+        {
+          id: "abc003",
+          credentialType: "Reputation",
+          subject: _address,
+          issuer: "GISSUER",
+          claims: {},
+          claimsHash: "mockhash",
+          signature: "",
+          issuedAt: now - 100,
+          expiresAt: now + 3 * 24 * 60 * 60,
+          revoked: false,
+        },
+      ];
+    },
+    [],
+  );
+
+  const { notification, dismiss } = useCredentialExpiryCheck(
+    wallet.publicKey,
+    fetchCredentials,
+  );
 
   const toggleLang = () => {
     const next = i18n.language === "en" ? "es" : "en";
@@ -62,8 +130,50 @@ export default function App() {
       <header style={{ position: "relative" }}>
         <h1>{t("app.title")}</h1>
         <p>{t("app.subtitle")}</p>
-        <div style={{ position: "absolute", top: "1rem", right: 0, display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <button className="theme-toggle" onClick={toggleLang} aria-label="Switch language">
+        <div
+          style={{
+            position: "absolute",
+            top: "1rem",
+            right: 0,
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+          }}
+        >
+          {isConnected !== null && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.4rem 0.8rem",
+                borderRadius: "0.25rem",
+                backgroundColor: isConnected
+                  ? "var(--success-bg, #d4edda)"
+                  : "var(--danger-bg, #f8d7da)",
+                color: isConnected
+                  ? "var(--success-text, #155724)"
+                  : "var(--danger-text, #721c24)",
+                fontSize: "0.85rem",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: isConnected ? "#28a745" : "#dc3545",
+                }}
+              />
+              {isConnected ? t("app.networkOnline") : t("app.networkOffline")}
+            </div>
+          )}
+          <button
+            className="theme-toggle"
+            onClick={toggleLang}
+            aria-label="Switch language"
+          >
             {i18n.language === "en" ? "ES" : "EN"}
           </button>
           <label className="network-switcher" aria-label="Network">
@@ -90,9 +200,50 @@ export default function App() {
         </div>
       </header>
 
-      {networkConfig.isMainnet && (
-        <div className="mainnet-warning" role="alert">
-          Mainnet is active. Transactions may use real accounts and deployed production contracts.
+      {uninitializedContracts.length > 0 && (
+        <div
+          role="alert"
+          aria-label="Contract not initialized warning"
+          style={{
+            background: "var(--warning-bg, #fff3cd)",
+            color: "var(--warning-text, #856404)",
+            border: "1px solid var(--warning-border, #ffc107)",
+            borderRadius: "0.5rem",
+            padding: "0.6rem 1rem",
+            marginBottom: "1rem",
+            fontSize: "0.9rem",
+          }}
+        >
+          ⚠ Contract not initialized: <strong>{uninitializedContracts.join(", ")}</strong>.
+          Please run the deploy script and update your contract IDs.{" "}
+          <a
+            href="docs/architecture.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "inherit", textDecoration: "underline" }}
+          >
+            Deployment guide
+          </a>
+        </div>
+      )}
+
+      {onMainnet && (
+        <div
+          role="alert"
+          aria-label="Mainnet warning"
+          style={{
+            background: "var(--badge-red-bg)",
+            color: "var(--badge-red-text)",
+            border: "1px solid var(--badge-red-text)",
+            borderRadius: "0.5rem",
+            padding: "0.6rem 1rem",
+            marginBottom: "1rem",
+            fontSize: "0.9rem",
+            fontWeight: 600,
+          }}
+        >
+          ⚠ You are connected to Stellar <strong>mainnet</strong>. All actions submit real
+          transactions and may incur on-chain fees.
         </div>
       )}
 
@@ -113,12 +264,19 @@ export default function App() {
           }}
         >
           <span>
-            ⚠ {notification.count} credential{notification.count > 1 ? "s" : ""} expiring within 7 days
+            ⚠ {notification.count} credential{notification.count > 1 ? "s" : ""}{" "}
+            expiring within 7 days
           </span>
           <button
             onClick={dismiss}
             aria-label="Dismiss notification"
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1rem", color: "inherit" }}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "1rem",
+              color: "inherit",
+            }}
           >
             ✕
           </button>
@@ -140,11 +298,9 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "identity" && (
-        <IdentityPanel wallet={wallet} networkConfig={networkConfig} />
-      )}
+      {tab === "identity" && <IdentityPanel />}
       {tab === "credentials" && (
-        <CredentialsPanel wallet={wallet} networkConfig={networkConfig} />
+        <CredentialsPanel verifyId={verifyId} />
       )}
     </div>
   );

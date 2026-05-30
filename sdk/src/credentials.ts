@@ -9,16 +9,44 @@ import {
 } from "@stellar/stellar-sdk";
 import type { CallOptions, Credential, CredentialStorageStats, CredentialType, SorobanIdentityConfig, VerifyResult, WriteResult } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus } from "./utils";
+import { ContractError } from "./errors";
+import { CREDENTIAL_MANAGER_ERRORS } from "./error-codes";
+import { BaseClient } from "./base-client";
 
-export class CredentialClient {
-  private server: SorobanRpc.Server;
-  private contract: Contract;
-  private config: SorobanIdentityConfig;
+const PROBE_ADDRESS = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
+export class CredentialClient extends BaseClient {
   constructor(config: SorobanIdentityConfig) {
-    this.config = config;
-    this.server = new SorobanRpc.Server(config.rpcUrl);
-    this.contract = new Contract(config.credentialManagerId);
+    super(config, config.credentialManagerId);
+  }
+
+  /** Returns true if the credential-manager contract has been initialized. */
+  async isInitialized(): Promise<boolean> {
+    try {
+      const account = await this.server.getAccount(PROBE_ADDRESS);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "is_issuer",
+            nativeToScVal(PROBE_ADDRESS, { type: "address" })
+          )
+        )
+        .setTimeout(10)
+        .build();
+      const result = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        const err: string = (result as { error: string }).error ?? "";
+        if (err.includes("not initialized") || err.includes("NotInitialized") || err.includes("#0")) {
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -129,6 +157,10 @@ export class CredentialClient {
 
     if (SorobanRpc.Api.isSimulationError(result)) {
       const error: string = (result as { error: string }).error ?? "";
+      const contractErr = ContractError.extract(error, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr?.code === 2) return { valid: false, reason: "not_found" };
+      if (contractErr?.code === 3) return { valid: false, reason: "revoked" };
+      if (contractErr?.code === 5) return { valid: false, reason: "expired" };
       if (error.includes("credential not found")) {
         return { valid: false, reason: "not_found" };
       }
@@ -185,7 +217,10 @@ export class CredentialClient {
 
     const idsResult = await retryWithBackoff(() => this.server.simulateTransaction(idsTx));
     if (SorobanRpc.Api.isSimulationError(idsResult)) {
-      throw new Error(`Simulation failed: ${idsResult.error}`);
+      const errMsg = idsResult.error ?? "";
+      const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     const ids = scValToNative(
@@ -233,10 +268,12 @@ export class CredentialClient {
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
       const error: string = (result as { error: string }).error ?? "";
-      if (error.includes("CredentialNotFound") || error.includes("#3")) {
+      const contractErr = ContractError.extract(error, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      if (error.includes("CredentialNotFound")) {
         throw new Error("CredentialNotFound: credential does not exist");
       }
-      if (error.includes("CredentialRevoked") || error.includes("#4")) {
+      if (error.includes("CredentialRevoked")) {
         throw new Error("CredentialRevoked: credential has been revoked");
       }
       throw new Error(`Simulation failed: ${error}`);
@@ -276,7 +313,10 @@ export class CredentialClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation failed: ${result.error}`);
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     return scValToNative(
@@ -328,7 +368,10 @@ export class CredentialClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation failed: ${result.error}`);
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     return scValToNative(
@@ -355,7 +398,10 @@ export class CredentialClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation failed: ${result.error}`);
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     const issuers = scValToNative(
@@ -382,7 +428,10 @@ export class CredentialClient {
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
     if (SorobanRpc.Api.isSimulationError(result)) {
-      throw new Error(`Simulation failed: ${result.error}`);
+      const errMsg = result.error ?? "";
+      const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
+      if (contractErr) throw contractErr;
+      throw new Error(`Simulation failed: ${errMsg}`);
     }
 
     return scValToNative(
