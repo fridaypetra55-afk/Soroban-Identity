@@ -431,7 +431,22 @@ impl CredentialManager {
         let key = Self::cred_key(&credential_id);
         match env.storage().persistent().get::<_, Credential>(&key) {
             None => false,
-            Some(cred) => cred.claims_hash == hash,
+            Some(cred) => {
+                let ttl = if cred.expires_at == 0 {
+                    TTL_MAX
+                } else {
+                    let now = env.ledger().timestamp();
+                    if cred.expires_at > now {
+                        ((cred.expires_at - now) / 5).max(1) as u32
+                    } else {
+                        0
+                    }
+                };
+                if ttl > 0 {
+                    env.storage().persistent().extend_ttl(&key, ttl, ttl);
+                }
+                cred.claims_hash == hash
+            }
         }
     }
 
@@ -457,6 +472,9 @@ impl CredentialManager {
     /// * `subject` - The address whose credential count to retrieve.
     pub fn get_credential_count(env: Env, subject: Address) -> u32 {
         let cnt_key = (CRED_CNT, subject);
+        if env.storage().persistent().has(&cnt_key) {
+            env.storage().persistent().extend_ttl(&cnt_key, TTL_MAX, TTL_MAX);
+        }
         env.storage().persistent().get(&cnt_key).unwrap_or(0)
     }
 
@@ -514,6 +532,9 @@ impl CredentialManager {
 
     fn fetch_subject_creds(env: &Env, subject: &Address) -> Vec<BytesN<32>> {
         let key = Self::subject_key(subject);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_MAX, TTL_MAX);
+        }
         env.storage()
             .persistent()
             .get(&key)

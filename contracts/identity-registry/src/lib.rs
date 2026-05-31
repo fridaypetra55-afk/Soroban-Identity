@@ -308,6 +308,9 @@ impl IdentityRegistry {
     /// Returns [`ContractError::DidDeactivated`] if the DID has been deactivated.
     pub fn resolve_did(env: Env, controller: Address) -> Result<DidDocument, ContractError> {
         let key = Self::did_key(&env, &controller);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
+        }
         let doc: DidDocument = env
             .storage()
             .persistent()
@@ -329,6 +332,9 @@ impl IdentityRegistry {
     /// * `controller` - The Stellar address to check.
     pub fn has_active_did(env: Env, controller: Address) -> bool {
         let key = Self::did_key(&env, &controller);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
+        }
         match env.storage().persistent().get::<_, DidDocument>(&key) {
             Some(doc) => doc.active,
             None => false,
