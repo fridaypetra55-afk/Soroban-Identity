@@ -118,6 +118,7 @@ export class CredentialClient extends BaseClient {
     prepared.sign(issuerKeypair);
 
     const result = await retryWithBackoff(() => this.server.sendTransaction(prepared));
+    this.debug('sdk.submission_outcome', { operation: 'credentials.sendTransaction', status: result.status });
     if (result.status !== "PENDING") {
       throw new SorobanIdentityError(`Transaction failed: ${result.status}`, "CONTRACT_ERROR");
     }
@@ -158,6 +159,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
 
     if (SorobanRpc.Api.isSimulationError(result)) {
       const error: string = (result as { error: string }).error ?? "";
@@ -220,6 +222,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const idsResult = await retryWithBackoff(() => this.server.simulateTransaction(idsTx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.getCredentialsBySubject.ids', success: !SorobanRpc.Api.isSimulationError(idsResult) });
     if (SorobanRpc.Api.isSimulationError(idsResult)) {
       const errMsg = idsResult.error ?? "";
       const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
@@ -270,6 +273,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
     if (SorobanRpc.Api.isSimulationError(result)) {
       const error: string = (result as { error: string }).error ?? "";
       const contractErr = ContractError.extract(error, CREDENTIAL_MANAGER_ERRORS);
@@ -316,6 +320,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
     if (SorobanRpc.Api.isSimulationError(result)) {
       const errMsg = result.error ?? "";
       const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
@@ -371,6 +376,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
     if (SorobanRpc.Api.isSimulationError(result)) {
       const errMsg = result.error ?? "";
       const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
@@ -401,6 +407,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
     if (SorobanRpc.Api.isSimulationError(result)) {
       const errMsg = result.error ?? "";
       const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
@@ -431,6 +438,7 @@ export class CredentialClient extends BaseClient {
       .build();
 
     const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    this.debug('sdk.simulation_result', { operation: 'credentials.simulateTransaction', success: !SorobanRpc.Api.isSimulationError(result) });
     if (SorobanRpc.Api.isSimulationError(result)) {
       const errMsg = result.error ?? "";
       const contractErr = ContractError.extract(errMsg, CREDENTIAL_MANAGER_ERRORS);
