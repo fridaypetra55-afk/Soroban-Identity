@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import SignClient from "@walletconnect/sign-client";
 import type { FrontendNetworkConfig } from "../network";
+import { getNetworkConfig, getActiveNetwork } from "../network";
 
 // ── Freighter types ───────────────────────────────────────────────────────────
 
@@ -76,6 +77,18 @@ export function useWallet(networkConfig: FrontendNetworkConfig) {
         window.freighter.getPublicKey(),
         window.freighter.getNetwork(),
       ]);
+
+      const activeNetworkConfig = getNetworkConfig();
+      if (networkPassphrase !== activeNetworkConfig.networkPassphrase) {
+        setState((s) => ({
+          ...s,
+          connecting: false,
+          error: `Freighter is on the wrong network. Expected ${getActiveNetwork()}.`,
+        }));
+        return;
+      }
+
+      localStorage.setItem("soroban-wallet-connected", "freighter");
 
       setState({
         publicKey,
@@ -176,6 +189,8 @@ export function useWallet(networkConfig: FrontendNetworkConfig) {
       const accounts = session.namespaces.stellar?.accounts ?? [];
       const publicKey = accounts[0]?.split(":")[2] ?? null;
 
+      localStorage.setItem("soroban-wallet-connected", "walletconnect");
+
       setState({
         publicKey,
         networkPassphrase: networkConfig.networkPassphrase,
@@ -189,6 +204,7 @@ export function useWallet(networkConfig: FrontendNetworkConfig) {
       // Handle remote disconnect
       client.on("session_delete", () => {
         wcTopicRef.current = null;
+        localStorage.removeItem("soroban-wallet-connected");
         setState({
           publicKey: null,
           networkPassphrase: null,
@@ -207,6 +223,17 @@ export function useWallet(networkConfig: FrontendNetworkConfig) {
       }));
     }
   }, [networkConfig.networkPassphrase, networkConfig.walletConnectChain]);
+
+  // ── Auto-reconnect on mount ─────────────────────────────────────────────────
+  
+  useEffect(() => {
+    const saved = localStorage.getItem("soroban-wallet-connected");
+    if (saved === "freighter") {
+      connectFreighter();
+    } else if (saved === "walletconnect") {
+      connectWalletConnect();
+    }
+  }, [connectFreighter, connectWalletConnect]);
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -235,6 +262,8 @@ export function useWallet(networkConfig: FrontendNetworkConfig) {
       wcClientRef.current = null;
       wcTopicRef.current = null;
     }
+
+    localStorage.removeItem("soroban-wallet-connected");
 
     setState({
       publicKey: null,
