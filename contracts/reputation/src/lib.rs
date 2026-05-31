@@ -38,6 +38,9 @@ const MIN_INTERVAL: u32 = 100;
 /// Max TTL for reputation records (~1 year)
 const TTL_MAX: u32 = 6_312_000;
 
+/// Max history items to keep per reporter-subject pair to bound storage
+const MAX_HISTORY: usize = 50;
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Storage usage statistics for the reputation contract.
@@ -343,6 +346,10 @@ impl Reputation {
             .persistent()
             .get(&history_key)
             .unwrap_or_else(|| Vec::new(&env));
+
+        if history.len() >= MAX_HISTORY as u32 {
+            history.remove(0); // Pop oldest to bound storage
+        }
 
         history.push_back(ScoreEntry {
             reporter: reporter.clone(),
