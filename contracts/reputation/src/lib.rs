@@ -11,6 +11,9 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
+/// Version returned by `ping` for deployment health checks.
+pub const CONTRACT_VERSION: u32 = 1;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const ADMIN: Symbol = symbol_short!("ADMIN");
@@ -34,6 +37,12 @@ pub enum ContractError {
 
 /// Minimum ledger interval between submissions from the same reporter for the same subject.
 const MIN_INTERVAL: u32 = 100;
+
+/// Max TTL for reputation records (~1 year)
+const TTL_MAX: u32 = 6_312_000;
+
+/// Max history items to keep per reporter-subject pair to bound storage
+const MAX_HISTORY: usize = 50;
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -105,6 +114,11 @@ pub struct Reputation;
 
 #[contractimpl]
 impl Reputation {
+    /// Lightweight read-only liveness check used by deployment monitors.
+    pub fn ping(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// Initializes the reputation contract with an admin address.
@@ -136,7 +150,11 @@ impl Reputation {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `current_admin` does not match the stored admin address.
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         current_admin.require_auth();
         let stored: Address = env
             .storage()
@@ -155,7 +173,11 @@ impl Reputation {
     }
 
     /// Upgrade the contract WASM. Only the admin can call this.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         let stored: Address = env
             .storage()
@@ -226,7 +248,11 @@ impl Reputation {
     /// * `env` - The Soroban environment.
     /// * `min_score` - Minimum accumulated score a subject must have.
     /// * `min_reporters` - Minimum number of distinct active reporters required.
-    pub fn set_default_threshold(env: Env, min_score: i64, min_reporters: u32) -> Result<(), ContractError> {
+    pub fn set_default_threshold(
+        env: Env,
+        min_score: i64,
+        min_reporters: u32,
+    ) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
         env.storage().instance().set(
             &DEF_THRESH,
@@ -268,7 +294,8 @@ impl Reputation {
         {
             None => Ok(false),
             Some(rec) => {
-                Ok(rec.score >= threshold.min_score && rec.reporter_count >= threshold.min_reporters)
+                Ok(rec.score >= threshold.min_score
+                    && rec.reporter_count >= threshold.min_reporters)
             }
         }
     }
@@ -307,7 +334,10 @@ impl Reputation {
         reporter.require_auth();
         Self::require_reporter(&env, &reporter)?;
 
-        // Validate reason string length
+        // Validate inputs
+        if delta < -100 || delta > 100 {
+            panic!("Delta must be between -100 and 100");
+        }
         if reason.len() > 256 {
             return Err(ContractError::ReasonTooLong);
         }
@@ -325,6 +355,7 @@ impl Reputation {
             }
         }
         env.storage().persistent().set(&rate_key, &current_ledger);
+        env.storage().persistent().extend_ttl(&rate_key, TTL_MAX, TTL_MAX);
 
         let now = env.ledger().timestamp();
         let rec_key = Self::record_key(&subject);
@@ -354,6 +385,7 @@ impl Reputation {
         }
 
         env.storage().persistent().set(&rec_key, &record);
+        env.storage().persistent().extend_ttl(&rec_key, TTL_MAX, TTL_MAX);
 
         // Append to per-reporter history
         let mut history: Vec<ScoreEntry> = env
@@ -362,6 +394,10 @@ impl Reputation {
             .get(&history_key)
             .unwrap_or_else(|| Vec::new(&env));
 
+        if history.len() >= MAX_HISTORY as u32 {
+            history.remove(0); // Pop oldest to bound storage
+        }
+
         history.push_back(ScoreEntry {
             reporter: reporter.clone(),
             delta,
@@ -369,6 +405,7 @@ impl Reputation {
             submitted_at: now,
         });
         env.storage().persistent().set(&history_key, &history);
+        env.storage().persistent().extend_ttl(&history_key, TTL_MAX, TTL_MAX);
 
         // Increment total score entries counter
         let score_cnt: u32 = env.storage().instance().get(&SCORE_CNT).unwrap_or(0);
@@ -392,6 +429,9 @@ impl Reputation {
     /// * `subject` - The address whose reputation record to fetch.
     pub fn get_reputation(env: Env, subject: Address) -> ReputationRecord {
         let key = Self::record_key(&subject);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_MAX, TTL_MAX);
+        }
         env.storage()
             .persistent()
             .get(&key)
@@ -433,6 +473,9 @@ impl Reputation {
         }
 
         let key = Self::history_key(&subject, &reporter);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_MAX, TTL_MAX);
+        }
         let all: Vec<ScoreEntry> = env
             .storage()
             .persistent()
@@ -479,6 +522,9 @@ impl Reputation {
         min_reporters: u32,
     ) -> bool {
         let key = Self::record_key(&subject);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_MAX, TTL_MAX);
+        }
         match env
             .storage()
             .persistent()
@@ -495,6 +541,7 @@ impl Reputation {
                 for reporter in active_reporters.iter() {
                     let history_key = Self::history_key(&subject, &reporter);
                     if env.storage().persistent().has(&history_key) {
+                        env.storage().persistent().extend_ttl(&history_key, TTL_MAX, TTL_MAX);
                         active_count += 1;
                     }
                 }

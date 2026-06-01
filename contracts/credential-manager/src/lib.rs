@@ -1,9 +1,13 @@
 #![no_std]
 
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, xdr::ToXdr, Address, Bytes,
     BytesN, Env, Map, String, Symbol, Vec,
 };
+
+/// Version returned by `ping` for deployment health checks.
+pub const CONTRACT_VERSION: u32 = 1;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -115,6 +119,11 @@ pub struct CredentialManager;
 
 #[contractimpl]
 impl CredentialManager {
+    /// Lightweight read-only liveness check used by deployment monitors.
+    pub fn ping(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// Initializes the credential manager with an admin address.
@@ -146,7 +155,11 @@ impl CredentialManager {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `current_admin` does not match the stored admin address.
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         current_admin.require_auth();
         let stored: Address = env
             .storage()
@@ -173,7 +186,11 @@ impl CredentialManager {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `admin` does not match the stored admin address.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         let stored: Address = env
             .storage()
@@ -199,7 +216,7 @@ impl CredentialManager {
     /// # Panics
     /// Panics with `"MaxIssuersReached"` if the issuer cap has been reached.
     pub fn add_issuer(env: Env, issuer: Address) -> Result<(), ContractError> {
-        Self::require_admin(&env);
+        Self::require_admin(&env)?;
         let mut issuers = Self::get_issuers_internal(&env);
         if !issuers.contains(&issuer) {
             if issuers.len() >= MAX_ISSUERS {
@@ -329,7 +346,7 @@ impl CredentialManager {
 
         env.events().publish(
             (CRED, symbol_short!("issued")),
-            (id.clone(), subject, issuer, credential_type),
+            (id.clone(), subject, issuer, credential_type, expires_at),
         );
 
         Ok(id)
@@ -456,7 +473,22 @@ impl CredentialManager {
         let key = Self::cred_key(&credential_id);
         match env.storage().persistent().get::<_, Credential>(&key) {
             None => false,
-            Some(cred) => cred.claims_hash == hash,
+            Some(cred) => {
+                let ttl = if cred.expires_at == 0 {
+                    TTL_MAX
+                } else {
+                    let now = env.ledger().timestamp();
+                    if cred.expires_at > now {
+                        ((cred.expires_at - now) / 5).max(1) as u32
+                    } else {
+                        0
+                    }
+                };
+                if ttl > 0 {
+                    env.storage().persistent().extend_ttl(&key, ttl, ttl);
+                }
+                cred.claims_hash == hash
+            }
         }
     }
 
@@ -560,6 +592,9 @@ impl CredentialManager {
     /// * `subject` - The address whose credential count to retrieve.
     pub fn get_credential_count(env: Env, subject: Address) -> u32 {
         let cnt_key = (CRED_CNT, subject);
+        if env.storage().persistent().has(&cnt_key) {
+            env.storage().persistent().extend_ttl(&cnt_key, TTL_MAX, TTL_MAX);
+        }
         env.storage().persistent().get(&cnt_key).unwrap_or(0)
     }
 
@@ -658,6 +693,9 @@ impl CredentialManager {
 
     fn fetch_subject_creds(env: &Env, subject: &Address) -> Vec<BytesN<32>> {
         let key = Self::subject_key(subject);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(&key, TTL_MAX, TTL_MAX);
+        }
         env.storage()
             .persistent()
             .get(&key)
