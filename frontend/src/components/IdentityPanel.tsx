@@ -10,6 +10,7 @@ import SkeletonCard from './SkeletonCard';
 import FormField from './FormField';
 import ReputationChart from './ReputationChart';
 import { formatTimestamp } from '../utils/formatDate';
+import { handleError, isNetworkError } from '../utils/handleError';
 import { useWalletContext } from '../context/WalletContext';
 import { exportDidDocumentAsJsonLd } from '../../../sdk/src/serializers';
 import { SorobanRpc, TransactionBuilder, BASE_FEE, nativeToScVal, Contract } from '@stellar/stellar-sdk';
@@ -72,14 +73,6 @@ export default function IdentityPanel() {
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const isNetworkError = (error: unknown): boolean => {
-    if (error instanceof TypeError) {
-      return error.message.includes("fetch") || error.message.includes("network");
-    }
-    const msg = error instanceof Error ? error.message : String(error);
-    return msg.includes("ECONNREFUSED") || msg.includes("unreachable") || msg.includes("timeout");
-  };
-
   const handleResolve = async () => {
     const address = resolveAddress.trim();
     if (!address) return;
@@ -116,9 +109,7 @@ export default function IdentityPanel() {
     } catch (e: unknown) {
       dispatch({
         type: 'FETCH_ERROR',
-        message: isNetworkError(e)
-          ? "Unable to reach the Soroban network. Please try again later."
-          : (e instanceof Error ? e.message : String(e)),
+        message: handleError(e),
         errorType: isNetworkError(e) ? 'network' : 'contract',
       });
     }
@@ -220,7 +211,7 @@ export default function IdentityPanel() {
         `DID created: did:stellar:${wallet.publicKey}\nEstimated fee: ${estimatedFee} stroops (${(estimatedFee / 10_000_000).toFixed(7)} XLM)`
       );
     } catch (e: unknown) {
-      setCreateResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setCreateResult(`Error: ${handleError(e)}`);
     } finally {
       setCreating(false);
     }
@@ -293,7 +284,7 @@ export default function IdentityPanel() {
       setUpdateSuccess(true);
       setTimeout(() => setUpdateSuccess(false), 3000);
     } catch (e: unknown) {
-      setCreateResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setCreateResult(`Error: ${handleError(e)}`);
     } finally {
       setUpdating(false);
     }
