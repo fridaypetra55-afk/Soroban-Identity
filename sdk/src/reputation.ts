@@ -15,6 +15,7 @@ import type {
   SorobanIdentityConfig,
   WriteResult,
 } from './types';
+import { validateConfig } from './types';
 import {
   retryWithBackoff,
   validateStellarAddress,
@@ -63,10 +64,8 @@ export class ReputationClient extends BaseClient {
    *   `config.reputationId` is missing.
    */
   constructor(config: SorobanIdentityConfig) {
-    if (!config.reputationId) {
-      throw new SorobanIdentityError('reputationId is required for ReputationClient', 'VALIDATION_ERROR');
-    }
-    super(config, config.reputationId);
+    validateConfig(config, { contractIdField: 'reputationId' });
+    super(config, config.reputationId!);
   }
 
   /** Returns true if the reputation contract has been initialized. */

@@ -15,6 +15,7 @@ pub const CONTRACT_VERSION: u32 = 1;
 const ADMIN: Symbol = symbol_short!("ADMIN");
 const ISSUER: Symbol = symbol_short!("ISSUER");
 const CRED: Symbol = symbol_short!("CRED");
+const SUBJECT: Symbol = symbol_short!("sub");
 const CRED_CNT: Symbol = symbol_short!("CREDCNT");
 const REVOKED_CNT: Symbol = symbol_short!("REVCNT");
 
@@ -132,6 +133,8 @@ impl CredentialManager {
     /// Must be called once before any other function. Subsequent calls will
     /// return [`ContractError::AlreadyInitialized`].
     ///
+    /// Follows the canonical pattern documented in `contracts/README.md`.
+    ///
     /// # Arguments
     /// * `env` - The Soroban environment.
     /// * `admin` - The address that will have admin privileges over this contract.
@@ -140,10 +143,9 @@ impl CredentialManager {
     /// Returns [`ContractError::AlreadyInitialized`] if the contract has already
     /// been initialized.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
-        if env.storage().instance().has(&ADMIN) {
-            return Err(ContractError::AlreadyInitialized);
-        }
-        env.storage().instance().set(&ADMIN, &admin);
+        Self::require_uninitialized(&env)?;
+        Self::set_admin(&env, &admin);
+        env.events().publish((ADMIN, symbol_short!("init")), admin);
         Ok(())
     }
 
@@ -667,6 +669,19 @@ impl CredentialManager {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /// Canonical init guard — see `contracts/README.md`.
+    fn require_uninitialized(env: &Env) -> Result<(), ContractError> {
+        if env.storage().instance().has(&ADMIN) {
+            return Err(ContractError::AlreadyInitialized);
+        }
+        Ok(())
+    }
+
+    /// Canonical admin persistence — see `contracts/README.md`.
+    fn set_admin(env: &Env, admin: &Address) {
+        env.storage().instance().set(&ADMIN, admin);
+    }
+
     fn require_admin(env: &Env) -> Result<(), ContractError> {
         let admin: Address = env
             .storage()
@@ -727,7 +742,7 @@ impl CredentialManager {
     }
 
     fn subject_key(subject: &Address) -> (Symbol, Address) {
-        (symbol_short!("sub"), subject.clone())
+        (SUBJECT, subject.clone())
     }
 
     /// Compute TTL ledgers for a credential.
@@ -1320,5 +1335,16 @@ mod tests {
         let page = client.list_subject_credentials(&subject, &None, &0, &None);
         assert_eq!(page.items.len(), 3);
         assert_eq!(page.next_cursor, None);
+    }
+
+    /// Storage namespace symbols must be pairwise distinct.
+    #[test]
+    fn test_storage_key_symbols_are_unique() {
+        let keys = [ADMIN, ISSUER, CRED, SUBJECT, CRED_CNT, REVOKED_CNT];
+        for (i, left) in keys.iter().enumerate() {
+            for right in keys.iter().skip(i + 1) {
+                assert_ne!(left, right);
+            }
+        }
     }
 }

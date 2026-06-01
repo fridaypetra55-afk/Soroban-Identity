@@ -19,6 +19,7 @@ import type {
   VerifyResult,
   WriteResult,
 } from "./types";
+import { validateConfig } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus } from "./utils";
 import { ContractError, SorobanIdentityError } from "./errors";
 import { CREDENTIAL_MANAGER_ERRORS } from "./error-codes";
@@ -52,6 +53,7 @@ export class CredentialClient extends BaseClient {
    * @param config SDK config including the deployed credential-manager contract ID.
    */
   constructor(config: SorobanIdentityConfig) {
+    validateConfig(config, { contractIdField: "credentialManagerId" });
     super(config, config.credentialManagerId);
   }
 
