@@ -1,9 +1,13 @@
 #![no_std]
 
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     Map, String, Symbol, Vec,
 };
+
+/// Version returned by `ping` for deployment health checks.
+pub const CONTRACT_VERSION: u32 = 1;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -90,6 +94,11 @@ pub struct CredentialManager;
 
 #[contractimpl]
 impl CredentialManager {
+    /// Lightweight read-only liveness check used by deployment monitors.
+    pub fn ping(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// Initializes the credential manager with an admin address.
@@ -121,7 +130,11 @@ impl CredentialManager {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `current_admin` does not match the stored admin address.
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         current_admin.require_auth();
         let stored: Address = env
             .storage()
@@ -148,7 +161,11 @@ impl CredentialManager {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `admin` does not match the stored admin address.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: Bytes) -> Result<(), ContractError> {
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         let stored: Address = env
             .storage()
@@ -174,7 +191,7 @@ impl CredentialManager {
     /// # Panics
     /// Panics with `"MaxIssuersReached"` if the issuer cap has been reached.
     pub fn add_issuer(env: Env, issuer: Address) -> Result<(), ContractError> {
-        Self::require_admin(&env);
+        Self::require_admin(&env)?;
         let mut issuers = Self::get_issuers_internal(&env);
         if !issuers.contains(&issuer) {
             if issuers.len() >= MAX_ISSUERS {
@@ -304,7 +321,7 @@ impl CredentialManager {
 
         env.events().publish(
             (CRED, symbol_short!("issued")),
-            (id.clone(), subject, issuer, credential_type),
+            (id.clone(), subject, issuer, credential_type, expires_at),
         );
 
         Ok(id)
@@ -535,20 +552,8 @@ impl CredentialManager {
             CredentialType::Custom => 3,
         };
         let mut data = Bytes::new(env);
-        data.extend_from_array(
-            &issuer
-                .clone()
-                .to_xdr(env)
-                .to_array::<64>()
-                .unwrap_or([0u8; 64]),
-        );
-        data.extend_from_array(
-            &subject
-                .clone()
-                .to_xdr(env)
-                .to_array::<64>()
-                .unwrap_or([0u8; 64]),
-        );
+        data.append(&issuer.clone().to_xdr(env));
+        data.append(&subject.clone().to_xdr(env));
         data.push_back(type_tag);
         env.crypto().sha256(&data).into()
     }

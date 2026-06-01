@@ -57,11 +57,18 @@ soroban-identity/
 │   └── reputation/            # On-chain scoring and anti-sybil checks
 ├── frontend/                  # React + TypeScript dApp (Vite)
 ├── sdk/                       # TypeScript SDK for dApp integration
+├── server/                    # Operational API, expiry jobs, health, and metrics
 ├── scripts/
 │   └── deploy.sh              # Build + deploy all contracts to testnet
 └── docs/
     └── architecture.md        # Protocol architecture deep-dive
 ```
+
+---
+
+## Server Operations
+
+The `server/` package provides contract health checks, protected admin issuer management, credential expiry reporting and notifications, and Prometheus metrics. See [`docs/server-operations.md`](docs/server-operations.md) for configuration and scrape examples.
 
 ---
 

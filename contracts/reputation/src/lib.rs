@@ -11,6 +11,9 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
+/// Version returned by `ping` for deployment health checks.
+pub const CONTRACT_VERSION: u32 = 1;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const ADMIN: Symbol = symbol_short!("ADMIN");
@@ -83,6 +86,11 @@ pub struct Reputation;
 
 #[contractimpl]
 impl Reputation {
+    /// Lightweight read-only liveness check used by deployment monitors.
+    pub fn ping(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// Initializes the reputation contract with an admin address.
@@ -114,7 +122,11 @@ impl Reputation {
     ///
     /// # Errors
     /// Returns [`ContractError::Unauthorized`] if `current_admin` does not match the stored admin address.
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         current_admin.require_auth();
         let stored: Address = env
             .storage()
@@ -133,7 +145,11 @@ impl Reputation {
     }
 
     /// Upgrade the contract WASM. Only the admin can call this.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         let stored: Address = env
             .storage()
@@ -166,6 +182,7 @@ impl Reputation {
                 (reporter, env.ledger().timestamp()),
             );
         }
+        Ok(())
     }
 
     /// Removes a trusted reporter (admin only).
@@ -203,7 +220,11 @@ impl Reputation {
     /// * `env` - The Soroban environment.
     /// * `min_score` - Minimum accumulated score a subject must have.
     /// * `min_reporters` - Minimum number of distinct active reporters required.
-    pub fn set_default_threshold(env: Env, min_score: i64, min_reporters: u32) -> Result<(), ContractError> {
+    pub fn set_default_threshold(
+        env: Env,
+        min_score: i64,
+        min_reporters: u32,
+    ) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
         env.storage().instance().set(
             &DEF_THRESH,
@@ -243,9 +264,10 @@ impl Reputation {
             .persistent()
             .get::<(Symbol, Address), ReputationRecord>(&key)
         {
-            None => false,
+            None => Ok(false),
             Some(rec) => {
-                Ok(rec.score >= threshold.min_score && rec.reporter_count >= threshold.min_reporters)
+                Ok(rec.score >= threshold.min_score
+                    && rec.reporter_count >= threshold.min_reporters)
             }
         }
     }
