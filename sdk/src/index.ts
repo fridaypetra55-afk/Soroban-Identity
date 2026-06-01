@@ -1,4 +1,6 @@
 export { IdentityClient } from './identity';
+export { healthCheck } from './health';
+export type { HealthCheckResult } from './health';
 export { CredentialClient } from './credentials';
 export { ReputationClient } from './reputation';
 export { SorobanEventListener, getEvents } from './events';
@@ -10,7 +12,18 @@ export {
   validateStellarAddress,
   computeCredentialId,
 } from './utils';
-export { ContractError } from './errors';
+export {
+  ContractError,
+  SorobanIdentityError,
+  classifyError,
+  wrapError,
+} from './errors';
+export type {
+  SorobanErrorCode,
+  SorobanIdentityErrorInit,
+} from './errors';
+// #249 / #252 / #253 / #254 — server-layer helpers.
+export * from './server';
 export {
   IDENTITY_REGISTRY_ERRORS,
   CREDENTIAL_MANAGER_ERRORS,
@@ -18,6 +31,28 @@ export {
 } from './error-codes';
 export { clearServerCache } from './base-client';
 export { toW3CDidDocument, exportDidDocumentAsJsonLd } from './serializers';
+export {
+  buildCreateDidArgs,
+  buildUpdateDidArgs,
+  buildResolveDidArgs,
+  buildHasActiveDidArgs,
+  buildDeactivateDidArgs,
+  buildIssueCredentialArgs,
+  buildVerifyCredentialArgs,
+  buildGetCredentialArgs,
+  buildGetSubjectCredentialsArgs,
+  buildIsIssuerArgs,
+  buildGetCredentialCountArgs,
+  buildListSubjectCredentialsArgs,
+  buildListIssuersArgs,
+  buildGetReputationArgs,
+  buildGetHistoryArgs,
+  buildPassesSybilCheckDefaultArgs,
+  buildPassesSybilCheckArgs,
+  buildSubmitScoreArgs,
+  buildListReportersArgs,
+  buildListHistoryArgs,
+} from './contract-args';
 export type {
   DidDocument,
   Credential,
@@ -31,7 +66,10 @@ export type {
   ReputationStorageStats,
   Page,
   PaginationOptions,
+  SorobanIdentityContractIdField,
+  ValidateConfigOptions,
 } from './types';
+export { validateConfig } from './types';
 export type { ReputationRecord, ScoreHistoryEntry } from './reputation';
 export type { EventFilter, ContractEvent, GetEventsOptions } from './events';
 import type { SorobanIdentityConfig } from './types';

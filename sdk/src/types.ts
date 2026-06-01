@@ -1,3 +1,5 @@
+import { StrKey } from "@stellar/stellar-sdk";
+
 /**
  * Decentralised identifier document as stored by the identity-registry contract.
  *
@@ -67,7 +69,8 @@ export interface SorobanIdentityConfig {
   networkPassphrase: string;
   identityRegistryId: string;
   credentialManagerId: string;
-  reputationId?: string;
+  /** Contract ID for the reputation contract. Required when using {@link ReputationClient}. */
+  reputationId: string;
   /** Transaction timeout in seconds. Defaults to 30. */
   txTimeout?: number;
   /** Maximum concurrent RPC requests. Defaults to 5. */
@@ -142,4 +145,41 @@ export interface PaginationOptions extends CallOptions {
  */
 export interface CredentialListOptions extends PaginationOptions {
   credentialType?: CredentialType;
+}
+
+/** Contract ID field validated by {@link validateConfig} for a specific client. */
+export type SorobanIdentityContractIdField =
+  | "identityRegistryId"
+  | "credentialManagerId"
+  | "reputationId";
+
+export interface ValidateConfigOptions {
+  /** Contract ID that must be present and valid for the calling client. */
+  contractIdField: SorobanIdentityContractIdField;
+}
+
+/**
+ * Validates a {@link SorobanIdentityConfig} at client construction time so
+ * misconfiguration fails fast with a descriptive error instead of a deep RPC failure.
+ */
+export function validateConfig(
+  config: SorobanIdentityConfig,
+  options: ValidateConfigOptions
+): void {
+  const rpcUrls = Array.isArray(config.rpcUrl) ? config.rpcUrl : [config.rpcUrl];
+  if (rpcUrls.length === 0 || rpcUrls.some((url) => !url?.trim())) {
+    throw new Error("rpcUrl is required");
+  }
+
+  if (!config.networkPassphrase?.trim()) {
+    throw new Error("networkPassphrase is required");
+  }
+
+  const contractId = config[options.contractIdField];
+  if (!contractId?.trim()) {
+    throw new Error(`${options.contractIdField} is required`);
+  }
+  if (!StrKey.isValidContract(contractId)) {
+    throw new Error(`${options.contractIdField} is not a valid contract ID`);
+  }
 }

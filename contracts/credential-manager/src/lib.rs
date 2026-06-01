@@ -1,8 +1,7 @@
 #![no_std]
 
-use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, xdr::ToXdr, Address, Bytes,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes,
     BytesN, Env, Map, String, Symbol, Vec,
 };
 use soroban_sdk::xdr::ToXdr;
@@ -15,6 +14,7 @@ pub const CONTRACT_VERSION: u32 = 1;
 const ADMIN: Symbol = symbol_short!("ADMIN");
 const ISSUER: Symbol = symbol_short!("ISSUER");
 const CRED: Symbol = symbol_short!("CRED");
+const SUBJECT: Symbol = symbol_short!("sub");
 const CRED_CNT: Symbol = symbol_short!("CREDCNT");
 const REVOKED_CNT: Symbol = symbol_short!("REVCNT");
 
@@ -132,6 +132,8 @@ impl CredentialManager {
     /// Must be called once before any other function. Subsequent calls will
     /// return [`ContractError::AlreadyInitialized`].
     ///
+    /// Follows the canonical pattern documented in `contracts/README.md`.
+    ///
     /// # Arguments
     /// * `env` - The Soroban environment.
     /// * `admin` - The address that will have admin privileges over this contract.
@@ -140,10 +142,9 @@ impl CredentialManager {
     /// Returns [`ContractError::AlreadyInitialized`] if the contract has already
     /// been initialized.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
-        if env.storage().instance().has(&ADMIN) {
-            return Err(ContractError::AlreadyInitialized);
-        }
-        env.storage().instance().set(&ADMIN, &admin);
+        Self::require_uninitialized(&env)?;
+        Self::set_admin(&env, &admin);
+        env.events().publish((ADMIN, symbol_short!("init")), admin);
         Ok(())
     }
 
@@ -667,6 +668,19 @@ impl CredentialManager {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /// Canonical init guard — see `contracts/README.md`.
+    fn require_uninitialized(env: &Env) -> Result<(), ContractError> {
+        if env.storage().instance().has(&ADMIN) {
+            return Err(ContractError::AlreadyInitialized);
+        }
+        Ok(())
+    }
+
+    /// Canonical admin persistence — see `contracts/README.md`.
+    fn set_admin(env: &Env, admin: &Address) {
+        env.storage().instance().set(&ADMIN, admin);
+    }
+
     fn require_admin(env: &Env) -> Result<(), ContractError> {
         let admin: Address = env
             .storage()
@@ -727,7 +741,7 @@ impl CredentialManager {
     }
 
     fn subject_key(subject: &Address) -> (Symbol, Address) {
-        (symbol_short!("sub"), subject.clone())
+        (SUBJECT, subject.clone())
     }
 
     /// Compute TTL ledgers for a credential.
@@ -788,6 +802,33 @@ mod tests {
     }
 
     #[test]
+    fn test_ping_returns_version() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, CredentialManager);
+        let client = CredentialManagerClient::new(&env, &contract_id);
+        assert_eq!(client.ping(), CONTRACT_VERSION);
+    }
+
+    #[test]
+    fn test_upgrade_unauthorized_returns_error() {
+        let (env, admin, client) = setup();
+        let attacker = Address::generate(&env);
+        let result = client.try_upgrade(&attacker, &BytesN::from_array(&env, &[0u8; 32]));
+        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_upgrade_not_initialized_returns_error() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CredentialManager);
+        let client = CredentialManagerClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let result = client.try_upgrade(&admin, &BytesN::from_array(&env, &[0u8; 32]));
+        assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
+    }
+
+    #[test]
     fn test_issue_and_verify() {
         let (env, _admin, client) = setup();
         let issuer = Address::generate(&env);
@@ -811,16 +852,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_issue_credential_already_expired() {
         let (env, _admin, client) = setup();
         let issuer = Address::generate(&env);
         let subject = Address::generate(&env);
         client.add_issuer(&issuer);
 
-        let past_expiry = env.ledger().timestamp().saturating_sub(1);
+        // Advance ledger so timestamp > 0, then use a strictly past expiry
+        env.ledger().with_mut(|li| li.timestamp = 100);
+        let past_expiry = 50u64;
         let sig = Bytes::from_array(&env, &[0u8; 64]);
-        client.issue_credential(
+        let result = client.try_issue_credential(
             &issuer,
             &subject,
             &CredentialType::Kyc,
@@ -829,6 +871,7 @@ mod tests {
             &sig,
             &past_expiry,
         );
+        assert_eq!(result, Err(Ok(ContractError::CredentialExpired)));
     }
 
     #[test]
@@ -1171,9 +1214,9 @@ mod tests {
         // verify_credential returns false for revoked — no TTL bump
         assert!(!client.verify_credential(&cred_id));
 
-        // get_credential still returns the record (not extended)
-        let cred = client.get_credential(&cred_id);
-        assert!(cred.revoked);
+        // get_credential returns CredentialRevoked for revoked entries
+        let result = client.try_get_credential(&cred_id);
+        assert!(matches!(result, Err(Ok(ContractError::CredentialRevoked))));
     }
 
     fn issue_typed(
@@ -1320,5 +1363,16 @@ mod tests {
         let page = client.list_subject_credentials(&subject, &None, &0, &None);
         assert_eq!(page.items.len(), 3);
         assert_eq!(page.next_cursor, None);
+    }
+
+    /// Storage namespace symbols must be pairwise distinct.
+    #[test]
+    fn test_storage_key_symbols_are_unique() {
+        let keys = [ADMIN, ISSUER, CRED, SUBJECT, CRED_CNT, REVOKED_CNT];
+        for (i, left) in keys.iter().enumerate() {
+            for right in keys.iter().skip(i + 1) {
+                assert_ne!(left, right);
+            }
+        }
     }
 }

@@ -1,4 +1,5 @@
 import {
+  Account,
   Contract,
   SorobanRpc,
   TransactionBuilder,
@@ -19,10 +20,21 @@ import type {
   VerifyResult,
   WriteResult,
 } from "./types";
+import { validateConfig } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus } from "./utils";
 import { ContractError, SorobanIdentityError } from "./errors";
 import { CREDENTIAL_MANAGER_ERRORS } from "./error-codes";
 import { BaseClient } from "./base-client";
+import {
+  buildIssueCredentialArgs,
+  buildVerifyCredentialArgs,
+  buildGetCredentialArgs,
+  buildGetSubjectCredentialsArgs,
+  buildIsIssuerArgs,
+  buildGetCredentialCountArgs,
+  buildListSubjectCredentialsArgs,
+  buildListIssuersArgs,
+} from "./contract-args";
 
 const PROBE_ADDRESS = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 const CREDENTIAL_VERIFY_NOT_FOUND_CODE = 2;
@@ -52,6 +64,7 @@ export class CredentialClient extends BaseClient {
    * @param config SDK config including the deployed credential-manager contract ID.
    */
   constructor(config: SorobanIdentityConfig) {
+    validateConfig(config, { contractIdField: "credentialManagerId" });
     super(config, config.credentialManagerId);
   }
 
@@ -67,7 +80,7 @@ export class CredentialClient extends BaseClient {
         .addOperation(
           this.contract.call(
             "is_issuer",
-            nativeToScVal(PROBE_ADDRESS, { type: "address" })
+            ...buildIsIssuerArgs({ address: PROBE_ADDRESS })
           )
         )
         .setTimeout(10)
@@ -142,12 +155,18 @@ export class CredentialClient extends BaseClient {
     const account = await this.server.getAccount(issuerKeypair.publicKey());
     const timeout = options?.timeoutSeconds ?? this.config.txTimeout ?? 30;
 
-    // Signature is over SHA256(issuer + subject + claims) — simplified here
+    // Signature is over SHA256(issuer + subject + claimsHash) — deterministic canonical encoding
     const signature = signatureHex
       ? Buffer.from(signatureHex, "hex")
-      : issuerKeypair.sign(
-          Buffer.from(JSON.stringify({ subjectAddress, claims }))
-        );
+      : (() => {
+          // Canonical message: issuer_public_key (utf8) || subject_address (utf8) || claims_hash (32 bytes)
+          const issuerBytes = Buffer.from(issuerKeypair.publicKey(), "utf8");
+          const subjectBytes = Buffer.from(subjectAddress, "utf8");
+          const claimsHashBytes = Buffer.from(claimsHashHex, "hex");
+          const msg = Buffer.concat([issuerBytes, subjectBytes, claimsHashBytes]);
+          const digest = createHash("sha256").update(msg).digest();
+          return issuerKeypair.sign(digest);
+        })();
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
@@ -156,13 +175,15 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "issue_credential",
-          nativeToScVal(issuerKeypair.publicKey(), { type: "address" }),
-          nativeToScVal(subjectAddress, { type: "address" }),
-          nativeToScVal(credentialType, { type: "symbol" }),
-          nativeToScVal(claims, { type: "map" }),
-          nativeToScVal(Buffer.from(claimsHashHex, "hex"), { type: "bytes" }),
-          nativeToScVal(signature, { type: "bytes" }),
-          nativeToScVal(expiresAt, { type: "u64" })
+          ...buildIssueCredentialArgs({
+            issuer: issuerKeypair.publicKey(),
+            subject: subjectAddress,
+            credentialType,
+            claims,
+            claimsHash: Buffer.from(claimsHashHex, "hex"),
+            signature: Buffer.from(signature),
+            expiresAt,
+          })
         )
       )
       .setTimeout(timeout)
@@ -223,7 +244,7 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "verify_credential",
-          nativeToScVal(idBytes, { type: "bytes" })
+          ...buildVerifyCredentialArgs({ credentialId: idBytes })
         )
       )
       .setTimeout(timeout)
@@ -302,7 +323,7 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "get_subject_credentials",
-          nativeToScVal(subjectAddress, { type: "address" })
+          ...buildGetSubjectCredentialsArgs({ subject: subjectAddress })
         )
       )
       .setTimeout(timeout)
@@ -364,7 +385,7 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "get_credential",
-          nativeToScVal(idBytes, { type: "bytes" })
+          ...buildGetCredentialArgs({ credentialId: idBytes })
         )
       )
       .setTimeout(timeout)
@@ -420,7 +441,7 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "is_issuer",
-          nativeToScVal(targetAddress, { type: "address" })
+          ...buildIsIssuerArgs({ address: targetAddress })
         )
       )
       .setTimeout(timeout)
@@ -497,7 +518,7 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           "get_credential_count",
-          nativeToScVal(subjectAddress, { type: "address" })
+          ...buildGetCredentialCountArgs({ subject: subjectAddress })
         )
       )
       .setTimeout(timeout)
@@ -662,10 +683,12 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           'list_subject_credentials',
-          nativeToScVal(subjectAddress, { type: 'address' }),
-          cursorArg,
-          nativeToScVal(options?.limit ?? 0, { type: 'u32' }),
-          filterArg
+          ...buildListSubjectCredentialsArgs({
+            subject: subjectAddress,
+            cursor: cursorArg,
+            limit: options?.limit ?? 0,
+            filter: filterArg,
+          })
         )
       )
       .setTimeout(timeout)
@@ -719,8 +742,10 @@ export class CredentialClient extends BaseClient {
       .addOperation(
         this.contract.call(
           'list_issuers',
-          cursorArg,
-          nativeToScVal(options?.limit ?? 0, { type: 'u32' })
+          ...buildListIssuersArgs({
+            cursor: cursorArg,
+            limit: options?.limit ?? 0,
+          })
         )
       )
       .setTimeout(timeout)
@@ -739,5 +764,38 @@ export class CredentialClient extends BaseClient {
     ) as { items: string[]; next_cursor: number | null };
 
     return { items: raw.items, nextCursor: raw.next_cursor ?? null };
+  }
+
+  /**
+   * Liveness probe — calls the on-chain `ping()` function.
+   *
+   * Returns the contract's `CONTRACT_VERSION` constant. Throws if the contract
+   * is not deployed or not responding.
+   *
+   * @param options Per-call overrides (currently `timeoutSeconds`).
+   * @returns The contract version number (currently `1`).
+   * @throws {SorobanIdentityError} with code `CONTRACT_ERROR` if the contract
+   *   does not respond.
+   */
+  async ping(options?: CallOptions): Promise<number> {
+    const account = new Account(PROBE_ADDRESS, "0");
+    const timeout = options?.timeoutSeconds ?? this.config.txTimeout ?? 30;
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(this.contract.call("ping"))
+      .setTimeout(timeout)
+      .build();
+    const result = await retryWithBackoff(() => this.server.simulateTransaction(tx));
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new SorobanIdentityError(
+        "Health check failed: credential-manager not responding",
+        "CONTRACT_ERROR"
+      );
+    }
+    return scValToNative(
+      (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval
+    ) as number;
   }
 }
