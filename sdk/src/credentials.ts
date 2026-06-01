@@ -142,12 +142,18 @@ export class CredentialClient extends BaseClient {
     const account = await this.server.getAccount(issuerKeypair.publicKey());
     const timeout = options?.timeoutSeconds ?? this.config.txTimeout ?? 30;
 
-    // Signature is over SHA256(issuer + subject + claims) — simplified here
+    // Signature is over SHA256(issuer + subject + claimsHash) — deterministic canonical encoding
     const signature = signatureHex
       ? Buffer.from(signatureHex, "hex")
-      : issuerKeypair.sign(
-          Buffer.from(JSON.stringify({ subjectAddress, claims }))
-        );
+      : (() => {
+          // Canonical message: issuer_public_key (utf8) || subject_address (utf8) || claims_hash (32 bytes)
+          const issuerBytes = Buffer.from(issuerKeypair.publicKey(), "utf8");
+          const subjectBytes = Buffer.from(subjectAddress, "utf8");
+          const claimsHashBytes = Buffer.from(claimsHashHex, "hex");
+          const msg = Buffer.concat([issuerBytes, subjectBytes, claimsHashBytes]);
+          const digest = createHash("sha256").update(msg).digest();
+          return issuerKeypair.sign(digest);
+        })();
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
