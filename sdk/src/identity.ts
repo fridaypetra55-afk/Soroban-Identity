@@ -8,6 +8,7 @@ import {
   Account,
 } from "@stellar/stellar-sdk";
 import type { CallOptions, DidDocument, IdentityStorageStats, SorobanIdentityConfig, WriteResult } from "./types";
+import { validateConfig } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus } from "./utils";
 import { ContractError, SorobanIdentityError } from "./errors";
 import { IDENTITY_REGISTRY_ERRORS } from "./error-codes";
@@ -42,6 +43,7 @@ export class IdentityClient extends BaseClient {
    * @param config SDK config including the deployed identity-registry contract ID.
    */
   constructor(config: SorobanIdentityConfig) {
+    validateConfig(config, { contractIdField: "identityRegistryId" });
     super(config, config.identityRegistryId);
   }
 

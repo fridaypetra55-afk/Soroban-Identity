@@ -16,6 +16,7 @@ import type {
   SorobanIdentityConfig,
   WriteResult,
 } from './types';
+import { validateConfig } from './types';
 import {
   retryWithBackoff,
   validateStellarAddress,

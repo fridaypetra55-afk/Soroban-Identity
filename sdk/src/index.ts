@@ -66,7 +66,10 @@ export type {
   ReputationStorageStats,
   Page,
   PaginationOptions,
+  SorobanIdentityContractIdField,
+  ValidateConfigOptions,
 } from './types';
+export { validateConfig } from './types';
 export type { ReputationRecord, ScoreHistoryEntry } from './reputation';
 export type { EventFilter, ContractEvent, GetEventsOptions } from './events';
 import type { SorobanIdentityConfig } from './types';
