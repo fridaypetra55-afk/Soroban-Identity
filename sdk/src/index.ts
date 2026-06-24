@@ -73,8 +73,7 @@ export type {
 export { validateConfig } from './types';
 export type { ReputationRecord, ScoreHistoryEntry } from './reputation';
 export type { EventFilter, ContractEvent, GetEventsOptions } from './events';
-import type { SorobanIdentityConfig } from './types';
-export type { SorobanIdentityConfig, SorobanIdentityLogger };
+export type { SorobanIdentityConfig, SorobanIdentityLogger, WriteResult } from './types';
 
 // Testnet defaults — fill contract IDs after deployment
 export const TESTNET_CONFIG: SorobanIdentityConfig = {
