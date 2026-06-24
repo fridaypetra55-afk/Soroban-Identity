@@ -1,6 +1,6 @@
 export { IdentityClient } from './identity';
-export { healthCheck } from './health';
-export type { HealthCheckResult } from './health';
+export { health, healthCheck } from './health';
+export type { HealthResult, HealthCheckResult } from './health';
 export { CredentialClient } from './credentials';
 export { ReputationClient } from './reputation';
 export { SorobanEventListener, getEvents } from './events';
