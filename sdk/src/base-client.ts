@@ -1,5 +1,8 @@
 import { SorobanRpc, Contract } from "@stellar/stellar-sdk";
 import type { SorobanIdentityConfig, SorobanIdentityLogger } from "./types";
+
+/** Semantic version of this SDK build — must match package.json `version`. */
+export const SDK_VERSION = "0.1.0";
 import { RequestQueue } from "./request-queue";
 
 const serverCache = new Map<string, SorobanRpc.Server>();
@@ -54,6 +57,13 @@ export abstract class BaseClient {
       config.retryDelay || 1000
     );
     this.logger = config.logger ?? noopLogger;
+
+    if (config.version && config.version !== SDK_VERSION) {
+      this.logger.warn?.(
+        `sdk.version_mismatch: configured version "${config.version}" does not match SDK version "${SDK_VERSION}". ` +
+          "Ensure the deployed contracts match this SDK release."
+      );
+    }
   }
 
   protected get server(): SorobanRpc.Server {

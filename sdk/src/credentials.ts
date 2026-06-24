@@ -546,6 +546,9 @@ export class CredentialClient extends BaseClient {
    * Convenience wrapper around {@link CredentialClient.verifyCredential} that
    * issues all simulations concurrently.
    *
+   * @deprecated Use {@link CredentialClient.verifyMany} instead, which accepts
+   *   the same arguments and adds a configurable concurrency limit.
+   *
    * @param callerAddress Stellar address used to build the read simulations.
    * @param credentialIds Hex-encoded credential IDs (32 bytes each).
    * @param options       Per-call overrides (applied to each underlying call).

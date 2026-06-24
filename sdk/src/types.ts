@@ -102,6 +102,14 @@ export interface SorobanIdentityConfig {
   retryDelay?: number;
   /** Optional pluggable logger for RPC simulation/submission traces. */
   logger?: SorobanIdentityLogger;
+  /**
+   * Expected contract deployment version string (e.g. `"0.1.0"`).
+   *
+   * When set and it does not match the SDK's own version constant the SDK
+   * emits a `warn` log at construction time so operators can catch
+   * contract/SDK mismatches before they cause runtime failures.
+   */
+  version?: string;
 }
 
 /** Per-call options that override the global config. */
