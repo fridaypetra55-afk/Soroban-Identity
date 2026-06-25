@@ -1,7 +1,7 @@
 export * as v1 from './v1';
 export { IdentityClient } from './identity';
-export { healthCheck } from './health';
-export type { HealthCheckResult } from './health';
+export { health, healthCheck } from './health';
+export type { HealthResult, HealthCheckResult } from './health';
 export { CredentialClient } from './credentials';
 export { ReputationClient } from './reputation';
 export { SorobanEventListener, getEvents } from './events';
@@ -17,6 +17,7 @@ export {
 export {
   ContractError,
   SorobanIdentityError,
+  RateLimitError,
   classifyError,
   wrapError,
 } from './errors';
@@ -75,8 +76,7 @@ export type {
 export { validateConfig } from './types';
 export type { ReputationRecord, ScoreHistoryEntry } from './reputation';
 export type { EventFilter, ContractEvent, GetEventsOptions } from './events';
-import type { SorobanIdentityConfig } from './types';
-export type { SorobanIdentityConfig, SorobanIdentityLogger };
+export type { SorobanIdentityConfig, SorobanIdentityLogger, WriteResult } from './types';
 
 // Testnet defaults — fill contract IDs after deployment
 export const TESTNET_CONFIG: SorobanIdentityConfig = {

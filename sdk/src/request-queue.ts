@@ -3,6 +3,8 @@
  * Prevents exhausting RPC quotas and handles 429 responses with retry-after.
  */
 
+import { RateLimitError } from './errors';
+
 interface QueuedRequest<T> {
   fn: () => Promise<T>;
   resolve: (value: T) => void;
@@ -68,10 +70,17 @@ export class RequestQueue {
           this.queue.unshift(request);
           this.processQueue();
         }, delay);
+      } else if (this.is429(error)) {
+        request.reject(new RateLimitError(this.getRetryDelay(error)));
       } else {
         request.reject(error);
       }
     }
+  }
+
+  private is429(error: any): boolean {
+    const errorStr = error?.toString() || '';
+    return errorStr.includes('429') || errorStr.includes('Too Many Requests');
   }
 
   private shouldRetry(error: any, request: QueuedRequest<any>): boolean {
