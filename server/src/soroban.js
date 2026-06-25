@@ -1,9 +1,140 @@
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { CircuitBreaker, SorobanUnavailableError } from './circuit-breaker.js';
+
+export { SorobanUnavailableError };
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Pool of long-lived worker processes that execute Stellar CLI commands.
+ *
+ * Keeps `size` worker processes alive so repeated invocations avoid the
+ * overhead of spawning a new OS process per call. Workers are restarted
+ * automatically if they exit unexpectedly.
+ *
+ * Pool size is controlled via the `SOROBAN_POOL_SIZE` environment variable
+ * (default: 4).
+ */
+class SubprocessPool {
+  #workers = [];
+  #queue = [];
+  #draining = false;
+  #drainResolvers = [];
+  #stellarCli;
+  #size;
+
+  constructor({ size = 4, stellarCli = 'stellar' } = {}) {
+    this.#size = size;
+    this.#stellarCli = stellarCli;
+  }
+
+  /** Spawn all worker processes. Call before the HTTP server starts listening. */
+  start() {
+    for (let i = 0; i < this.#size; i++) {
+      this.#spawnWorker();
+    }
+  }
+
+  #spawnWorker() {
+    const workerPath = path.join(__dirname, 'soroban-worker.js');
+    const proc = spawn(process.execPath, [workerPath], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+
+    const worker = { proc, busy: false, resolve: null, reject: null };
+
+    createInterface({ input: proc.stdout, terminal: false }).on('line', (line) => {
+      let msg;
+      try { msg = JSON.parse(line); } catch { return; }
+
+      const { resolve, reject } = worker;
+      worker.busy = false;
+      worker.resolve = null;
+      worker.reject = null;
+
+      if (msg.ok) resolve(msg.output);
+      else reject(new Error(msg.error));
+
+      if (this.#draining && this.#queue.length === 0 && this.#workers.every(w => !w.busy)) {
+        for (const w of this.#workers) w.proc.stdin.end();
+        for (const r of this.#drainResolvers) r();
+        this.#drainResolvers = [];
+      } else {
+        this.#dispatch();
+      }
+    });
+
+    proc.on('exit', () => {
+      this.#workers = this.#workers.filter(w => w !== worker);
+      if (worker.reject) {
+        worker.reject(new Error('worker process exited unexpectedly'));
+        worker.resolve = null;
+        worker.reject = null;
+      }
+      if (!this.#draining) {
+        this.#spawnWorker();
+      }
+    });
+
+    this.#workers.push(worker);
+    this.#dispatch();
+  }
+
+  #dispatch() {
+    if (this.#queue.length === 0) return;
+    const free = this.#workers.find(w => !w.busy);
+    if (!free) return;
+    const { commandArgs, resolve, reject } = this.#queue.shift();
+    free.busy = true;
+    free.resolve = resolve;
+    free.reject = reject;
+    free.proc.stdin.write(JSON.stringify({ stellarCli: this.#stellarCli, args: commandArgs }) + '\n');
+  }
+
+  /**
+   * Dispatch a command to a free worker (or queue it until one is available).
+   *
+   * @param {string[]} commandArgs Args to pass to the Stellar CLI worker.
+   * @returns {Promise<string>} stdout from the CLI invocation.
+   */
+  invoke(commandArgs) {
+    if (this.#draining) {
+      return Promise.reject(new Error('Pool is draining — no new invocations accepted'));
+    }
+    return new Promise((resolve, reject) => {
+      this.#queue.push({ commandArgs, resolve, reject });
+      this.#dispatch();
+    });
+  }
+
+  /**
+   * Wait for all in-flight and queued calls to complete, then shut down workers.
+   *
+   * @returns {Promise<void>}
+   */
+  drain() {
+    this.#draining = true;
+    if (this.#queue.length === 0 && this.#workers.every(w => !w.busy)) {
+      for (const w of this.#workers) w.proc.stdin.end();
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this.#drainResolvers.push(resolve));
+  }
+}
 
 export class SorobanClient {
   constructor(config, metrics) {
     this.config = config;
     this.metrics = metrics;
+    this.pool = new SubprocessPool({
+      size: config.poolSize ?? 4,
+      stellarCli: config.stellarCli,
+    });
+    this.pool.start();
+    this.circuitBreaker = new CircuitBreaker();
   }
 
   async invoke(contractId, method, args = []) {
@@ -22,9 +153,9 @@ export class SorobanClient {
     ];
     const started = performance.now();
     try {
-      const output = await runCommand(this.config.stellarCli, commandArgs);
+      const output = await this.circuitBreaker.call(() => this.pool.invoke(commandArgs));
       this.metrics?.observeRpcLatency((performance.now() - started) / 1000);
-      return output.trim();
+      return output;
     } catch (error) {
       this.metrics?.observeRpcLatency((performance.now() - started) / 1000);
       throw error;
@@ -83,21 +214,11 @@ export class SorobanClient {
       this.metrics?.observeRpcLatency((performance.now() - started) / 1000);
     }
   }
-}
 
-function runCommand(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(stderr || stdout || `${command} exited with ${code}`));
-    });
-  });
+  /** Gracefully drain the worker pool before shutdown. */
+  drain() {
+    return this.pool.drain();
+  }
 }
 
 function parseAddressList(raw) {
