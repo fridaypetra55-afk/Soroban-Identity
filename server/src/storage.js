@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { requestContextStore } from './request-context.js';
 
 let lastCheckedDate = null;
 
