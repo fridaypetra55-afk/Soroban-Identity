@@ -8,8 +8,11 @@ export type {
   VerifyResult,
   VerifyFailReason,
   SorobanIdentityConfig,
+  ReputationRecord,
+  ScoreHistoryEntry,
 } from "./types";
-export type { ReputationRecord, ScoreHistoryEntry } from "./reputation";
+export { executeTransaction } from "./transaction";
+export type { TxOptions } from "./transaction";
 
 // Testnet defaults — fill contract IDs after deployment
 export const TESTNET_CONFIG: SorobanIdentityConfig = {

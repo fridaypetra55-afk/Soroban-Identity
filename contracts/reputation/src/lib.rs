@@ -11,6 +11,8 @@ use soroban_sdk::{
     Address, Env, Symbol, Vec,
 };
 
+mod keys;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const ADMIN: Symbol    = symbol_short!("ADMIN");
@@ -93,8 +95,7 @@ impl Reputation {
 
         let now = env.ledger().timestamp();
 
-        // Update aggregate record
-        let rec_key = Self::record_key(&subject);
+        let rec_key = keys::record_key(&subject);
         let mut record: ReputationRecord = env
             .storage()
             .persistent()
@@ -109,8 +110,7 @@ impl Reputation {
         record.score = record.score.saturating_add(delta);
         record.updated_at = now;
 
-        // Track whether this reporter is new for this subject
-        let history_key = Self::history_key(&subject, &reporter);
+        let history_key = keys::history_key(&subject, &reporter);
         let is_new = !env.storage().persistent().has(&history_key);
         if is_new {
             record.reporter_count = record.reporter_count.saturating_add(1);
@@ -118,7 +118,6 @@ impl Reputation {
 
         env.storage().persistent().set(&rec_key, &record);
 
-        // Append to per-reporter history
         let mut history: Vec<ScoreEntry> = env
             .storage()
             .persistent()
@@ -139,7 +138,7 @@ impl Reputation {
 
     /// Get the reputation record for a subject.
     pub fn get_reputation(env: Env, subject: Address) -> ReputationRecord {
-        let key = Self::record_key(&subject);
+        let key = keys::record_key(&subject);
         env.storage()
             .persistent()
             .get(&key)
@@ -162,7 +161,7 @@ impl Reputation {
         offset: u32,
         limit: u32,
     ) -> Vec<ScoreEntry> {
-        let key = Self::history_key(&subject, &reporter);
+        let key = keys::history_key(&subject, &reporter);
         let all: Vec<ScoreEntry> = env
             .storage()
             .persistent()
@@ -190,7 +189,7 @@ impl Reputation {
         min_score: i64,
         min_reporters: u32,
     ) -> bool {
-        let key = Self::record_key(&subject);
+        let key = keys::record_key(&subject);
         match env.storage().persistent().get::<(Symbol, Address), ReputationRecord>(&key) {
             None => false,
             Some(rec) => rec.score >= min_score && rec.reporter_count >= min_reporters,
@@ -215,14 +214,6 @@ impl Reputation {
             .instance()
             .get(&REPORTER)
             .unwrap_or_else(|| Vec::new(env))
-    }
-
-    fn record_key(subject: &Address) -> (Symbol, Address) {
-        (symbol_short!("rec"), subject.clone())
-    }
-
-    fn history_key(subject: &Address, reporter: &Address) -> (Symbol, Address, Address) {
-        (symbol_short!("h"), subject.clone(), reporter.clone())
     }
 }
 

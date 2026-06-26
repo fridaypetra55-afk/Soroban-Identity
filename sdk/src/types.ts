@@ -27,6 +27,20 @@ export type VerifyResult =
   | { valid: true }
   | { valid: false; reason: VerifyFailReason };
 
+export interface ReputationRecord {
+  subject: string;
+  score: number;
+  reporterCount: number;
+  updatedAt: number;
+}
+
+export interface ScoreHistoryEntry {
+  reporter: string;
+  delta: number;
+  reason: string;
+  submittedAt: number;
+}
+
 export interface SorobanIdentityConfig {
   rpcUrl: string;
   networkPassphrase: string;

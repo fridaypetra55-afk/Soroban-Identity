@@ -4,24 +4,20 @@ import {
   TransactionBuilder,
   BASE_FEE,
   Keypair,
-  nativeToScVal,
-  scValToNative,
 } from "@stellar/stellar-sdk";
-import type { SorobanIdentityConfig } from "./types";
+import type { SorobanIdentityConfig, ReputationRecord, ScoreHistoryEntry } from "./types";
+import { executeTransaction, TxOptions } from "./transaction";
+import {
+  encodeAddress,
+  encodeI64,
+  encodeU32,
+  encodeString,
+  decodeReputationRecord,
+  decodeScoreHistory,
+  decodeBoolean,
+} from "./codec";
 
-export interface ReputationRecord {
-  subject: string;
-  score: number;
-  reporterCount: number;
-  updatedAt: number;
-}
-
-export interface ScoreHistoryEntry {
-  reporter: string;
-  delta: number;
-  reason: string;
-  submittedAt: number;
-}
+export type { ReputationRecord, ScoreHistoryEntry };
 
 export class ReputationClient {
   private server: SorobanRpc.Server;
@@ -43,10 +39,7 @@ export class ReputationClient {
       networkPassphrase: this.config.networkPassphrase,
     })
       .addOperation(
-        this.contract.call(
-          "get_reputation",
-          nativeToScVal(subjectAddress, { type: "address" })
-        )
+        this.contract.call("get_reputation", encodeAddress(subjectAddress))
       )
       .setTimeout(this.config.txTimeout ?? 30)
       .build();
@@ -56,9 +49,9 @@ export class ReputationClient {
       throw new Error(`Simulation failed: ${result.error}`);
     }
 
-    return scValToNative(
+    return decodeReputationRecord(
       (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval
-    ) as ReputationRecord;
+    );
   }
 
   /**
@@ -86,10 +79,10 @@ export class ReputationClient {
       .addOperation(
         this.contract.call(
           "get_history",
-          nativeToScVal(subjectAddress, { type: "address" }),
-          nativeToScVal(reporterAddress, { type: "address" }),
-          nativeToScVal(offset, { type: "u32" }),
-          nativeToScVal(limit, { type: "u32" })
+          encodeAddress(subjectAddress),
+          encodeAddress(reporterAddress),
+          encodeU32(offset),
+          encodeU32(limit)
         )
       )
       .setTimeout(this.config.txTimeout ?? 30)
@@ -100,9 +93,9 @@ export class ReputationClient {
       throw new Error(`Simulation failed: ${result.error}`);
     }
 
-    return scValToNative(
+    return decodeScoreHistory(
       (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval
-    ) as ScoreHistoryEntry[];
+    );
   }
 
   /** Check if a subject passes the sybil threshold. */
@@ -121,9 +114,9 @@ export class ReputationClient {
       .addOperation(
         this.contract.call(
           "passes_sybil_check",
-          nativeToScVal(subjectAddress, { type: "address" }),
-          nativeToScVal(minScore, { type: "i64" }),
-          nativeToScVal(minReporters, { type: "u32" })
+          encodeAddress(subjectAddress),
+          encodeI64(minScore),
+          encodeU32(minReporters)
         )
       )
       .setTimeout(this.config.txTimeout ?? 30)
@@ -132,9 +125,9 @@ export class ReputationClient {
     const result = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(result)) return false;
 
-    return scValToNative(
+    return decodeBoolean(
       (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval
-    ) as boolean;
+    );
   }
 
   /** Submit a score delta. Caller must be a registered reporter. */
@@ -142,7 +135,8 @@ export class ReputationClient {
     reporterKeypair: Keypair,
     subjectAddress: string,
     delta: number,
-    reason: string
+    reason: string,
+    txOptions?: TxOptions
   ): Promise<void> {
     const account = await this.server.getAccount(reporterKeypair.publicKey());
 
@@ -153,21 +147,20 @@ export class ReputationClient {
       .addOperation(
         this.contract.call(
           "submit_score",
-          nativeToScVal(reporterKeypair.publicKey(), { type: "address" }),
-          nativeToScVal(subjectAddress, { type: "address" }),
-          nativeToScVal(delta, { type: "i64" }),
-          nativeToScVal(reason, { type: "string" })
+          encodeAddress(reporterKeypair.publicKey()),
+          encodeAddress(subjectAddress),
+          encodeI64(delta),
+          encodeString(reason)
         )
       )
       .setTimeout(this.config.txTimeout ?? 30)
       .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(reporterKeypair);
-
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status !== "PENDING") {
-      throw new Error(`Transaction failed: ${result.status}`);
-    }
+    await executeTransaction(
+      this.server,
+      tx,
+      (t) => t.sign(reporterKeypair),
+      txOptions
+    );
   }
 }

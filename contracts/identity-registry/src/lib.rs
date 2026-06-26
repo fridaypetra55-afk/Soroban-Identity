@@ -5,6 +5,8 @@ use soroban_sdk::{
     Address, Bytes, Env, Map, String, Symbol,
 };
 
+mod keys;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 const IDENTITY: Symbol = symbol_short!("IDENTITY");
@@ -54,7 +56,7 @@ impl IdentityRegistry {
         controller.require_auth();
 
         let storage = env.storage().persistent();
-        let key = Self::did_key(&env, &controller);
+        let key = keys::did_key(&env, &controller);
 
         if storage.has(&key) {
             panic!("DID already exists for this address");
@@ -83,7 +85,7 @@ impl IdentityRegistry {
         controller.require_auth();
 
         let storage = env.storage().persistent();
-        let key = Self::did_key(&env, &controller);
+        let key = keys::did_key(&env, &controller);
         let mut doc: DidDocument = storage.get(&key).expect("DID not found");
 
         doc.metadata = metadata;
@@ -98,7 +100,7 @@ impl IdentityRegistry {
         controller.require_auth();
 
         let storage = env.storage().persistent();
-        let key = Self::did_key(&env, &controller);
+        let key = keys::did_key(&env, &controller);
         let mut doc: DidDocument = storage.get(&key).expect("DID not found");
 
         doc.active = false;
@@ -110,7 +112,7 @@ impl IdentityRegistry {
 
     /// Resolve a DID document by controller address.
     pub fn resolve_did(env: Env, controller: Address) -> DidDocument {
-        let key = Self::did_key(&env, &controller);
+        let key = keys::did_key(&env, &controller);
         env.storage()
             .persistent()
             .get(&key)
@@ -119,7 +121,7 @@ impl IdentityRegistry {
 
     /// Check whether an address has an active DID.
     pub fn has_active_did(env: Env, controller: Address) -> bool {
-        let key = Self::did_key(&env, &controller);
+        let key = keys::did_key(&env, &controller);
         match env.storage().persistent().get::<Bytes, DidDocument>(&key) {
             Some(doc) => doc.active,
             None => false,
@@ -127,17 +129,6 @@ impl IdentityRegistry {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    fn did_key(env: &Env, controller: &Address) -> Bytes {
-        // Use the raw address bytes as the storage key
-        let mut key = Bytes::new(env);
-        key.extend_from_array(&[b'd', b'i', b'd', b':']);
-        // append address bytes — Address implements IntoVal<Env, Bytes> indirectly
-        // so we serialize via the env
-        let addr_bytes = controller.to_string().into_bytes();
-        key.extend_from_slice(&addr_bytes);
-        key
-    }
 
     fn build_did_id(env: &Env, controller: &Address) -> String {
         // did:stellar:<bech32-address>
