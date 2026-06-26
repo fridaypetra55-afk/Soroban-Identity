@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { requestContextStore } from './request-context.js';
 
 export async function ensureDataDir(config) {
   await fs.mkdir(config.dataDir, { recursive: true });
@@ -9,7 +10,12 @@ export async function ensureDataDir(config) {
 
 export async function appendAuditLog(config, entry) {
   await ensureDataDir(config);
-  const record = { timestamp: new Date().toISOString(), ...entry };
+  const store = requestContextStore.getStore();
+  const record = {
+    timestamp: new Date().toISOString(),
+    ...(store?.requestId ? { requestId: store.requestId } : {}),
+    ...entry,
+  };
   await fs.appendFile(config.auditLogPath, `${JSON.stringify(record)}\n`, 'utf8');
   return record;
 }
