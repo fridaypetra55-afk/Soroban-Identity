@@ -36,6 +36,7 @@ export type {
 // #249 / #252 / #253 / #254 — server-layer helpers.
 export * from './server';
 export {
+  SorobanErrorCodes,
   IDENTITY_REGISTRY_ERRORS,
   CREDENTIAL_MANAGER_ERRORS,
   REPUTATION_ERRORS,
@@ -49,6 +50,7 @@ export {
   buildHasActiveDidArgs,
   buildDeactivateDidArgs,
   buildIssueCredentialArgs,
+  buildRevokeCredentialArgs,
   buildVerifyCredentialArgs,
   buildGetCredentialArgs,
   buildGetSubjectCredentialsArgs,
@@ -70,6 +72,7 @@ export type {
   DidDocument,
   ServiceEndpoint,
   Credential,
+  RevokedCredential,
   CredentialType,
   CredentialListOptions,
   VerifyResult,

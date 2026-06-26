@@ -10,7 +10,7 @@ import {
 import type { CallOptions, DidDocument, IdentityStorageStats, SorobanIdentityConfig, SorobanResponse, WriteResult } from "./types";
 import { validateConfig } from "./types";
 import { retryWithBackoff, validateStellarAddress, pollTransactionStatus, runConcurrent } from "./utils";
-import { ContractError, SorobanIdentityError } from "./errors";
+import { ContractError, SorobanIdentityError, wrapError } from "./errors";
 import { IDENTITY_REGISTRY_ERRORS } from "./error-codes";
 import { BaseClient } from "./base-client";
 import {
@@ -155,7 +155,7 @@ export class IdentityClient extends BaseClient {
           "VALIDATION_ERROR"
         );
       }
-      throw e;
+      throw wrapError(e);
     }
   }
 
@@ -225,7 +225,7 @@ export class IdentityClient extends BaseClient {
           "UNAUTHORIZED"
         );
       }
-      throw e;
+      throw wrapError(e);
     }
     return { data: undefined, txHash };
   }
