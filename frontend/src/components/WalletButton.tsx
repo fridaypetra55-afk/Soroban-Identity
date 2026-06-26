@@ -24,6 +24,7 @@ export default function WalletButton() {
             {short(publicKey)}
           </span>
           <button
+            className="wallet-button__disconnect"
             onClick={disconnect}
             disabled={txLoading}
             style={{ background: "transparent", border: "1px solid var(--border-input)", color: "var(--text-muted)", padding: "0.3rem 0.7rem" }}
