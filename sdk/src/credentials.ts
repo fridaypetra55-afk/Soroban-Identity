@@ -42,33 +42,26 @@ import {
 
 const PROBE_ADDRESS = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
-/** All parameters required for a single {@link CredentialClient.issueCredential} call. */
-export interface CredentialInput {
-  issuerKeypair: Keypair;
-  subjectAddress: string;
-  credentialType: CredentialType;
-  claims: Record<string, string>;
-  claimsHashHex: string;
-  expiresAt?: number;
-  options?: CallOptions & { nonce?: string; schemaId?: string };
-  signatureHex?: string;
-}
-
-/** Options for {@link CredentialClient.issueCredentialBatch}. */
-export interface BatchOptions {
-  /** Maximum parallel in-flight issuances per chunk. Defaults to `5`. */
-  concurrency?: number;
-}
-
 /**
- * Return type of {@link CredentialClient.issueCredentialBatch}.
+ * Converts a JavaScript Date or millisecond timestamp to Unix seconds for use
+ * as `expiresAt` in the credential-manager contract.
  *
- * Partial failures are isolated — a failed item does not abort the rest of
- * the batch.
+ * The contract uses `env.ledger().timestamp()` which is Unix **seconds**.
+ * JavaScript's `Date.now()` returns **milliseconds**, so passing it directly
+ * would cause credentials to expire ~1000x sooner than intended.
+ *
+ * @param dateOrMs - A `Date` object or a millisecond timestamp (e.g. `Date.now()`).
+ * @returns Unix timestamp in seconds, safe to pass as `expiresAt`.
+ *
+ * @example
+ * ```ts
+ * const expiresAt = toCredentialExpiry(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+ * await credentials.issueCredential(issuer, subject, type, claims, hash, expiresAt);
+ * ```
  */
-export interface BatchResult {
-  succeeded: Array<SorobanResponse<{ credentialId: string } & WriteResult>>;
-  failed: Array<{ input: CredentialInput; error: SorobanIdentityError }>;
+export function toCredentialExpiry(dateOrMs: Date | number): number {
+  const ms = dateOrMs instanceof Date ? dateOrMs.getTime() : dateOrMs;
+  return Math.floor(ms / 1000);
 }
 const CREDENTIAL_NOT_FOUND_CODE = 3;
 const CREDENTIAL_REVOKED_CODE = 4;
