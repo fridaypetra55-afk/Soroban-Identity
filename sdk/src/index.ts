@@ -1,3 +1,8 @@
+export { IdentityClient } from "./identity";
+export { CredentialClient } from "./credentials";
+export { ReputationClient } from "./reputation";
+export { SorobanIdentityError, parseContractError } from "./errors";
+export type { SorobanErrorCode } from "./errors";
 export * as v1 from './v1';
 export { IdentityClient } from './identity';
 export { health, healthCheck } from './health';

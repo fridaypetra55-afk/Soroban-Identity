@@ -1,6 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short,
+    Address, Bytes, Env, Map, String, Symbol,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     Map, String, Symbol, Vec,
 };
@@ -44,6 +46,17 @@ const DID_STELLAR_PREFIX: &[u8] = b"did:stellar:";
 /// ~1 year in ledgers (5-second ledger close time).
 /// Used as the TTL extension on every persistent read/write.
 const TTL_LEDGERS: u32 = 6_312_000;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum IdentityError {
+    AlreadyInitialized = 1,
+    AlreadyExists = 2,
+    NotFound = 3,
+    Unauthorized = 4,
+}
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -101,6 +114,12 @@ impl IdentityRegistry {
 
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    /// Initialize the registry with an admin address.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), IdentityError> {
+        if env.storage().instance().has(&ADMIN) {
+            return Err(IdentityError::AlreadyInitialized);
+        }
+        env.storage().instance().set(&ADMIN, &admin);
     /// Initializes the identity registry with an admin address.
     ///
     /// Must be called once before any other function. Subsequent calls will
@@ -182,6 +201,8 @@ impl IdentityRegistry {
 
     // ── DID management ────────────────────────────────────────────────────────
 
+    /// Create a new DID for the caller.
+    pub fn create_did(env: Env, controller: Address, metadata: Map<String, String>) -> Result<String, IdentityError> {
     /// Creates a new DID document for the given controller address.
     ///
     /// The DID identifier is derived as `did:stellar:<bech32-address>` and stored
@@ -214,6 +235,7 @@ impl IdentityRegistry {
         let key = keys::did_key(&env, &controller);
 
         if storage.has(&key) {
+            return Err(IdentityError::AlreadyExists);
             return Err(ContractError::DidAlreadyExists);
         }
 
@@ -250,6 +272,8 @@ impl IdentityRegistry {
         Ok(did_id)
     }
 
+    /// Update metadata on an existing DID.
+    pub fn update_did(env: Env, controller: Address, metadata: Map<String, String>) -> Result<(), IdentityError> {
     /// Updates the metadata on an existing DID document.
     ///
     /// Replaces the entire metadata map with the supplied values. The controller
@@ -283,6 +307,8 @@ impl IdentityRegistry {
         Self::validate_metadata(&metadata)?;
 
         let storage = env.storage().persistent();
+        let key = Self::did_key(&env, &controller);
+        let mut doc: DidDocument = storage.get(&key).ok_or(IdentityError::NotFound)?;
         let key = keys::did_key(&env, &controller);
         let mut doc: DidDocument = storage.get(&key).expect("DID not found");
         let key = Self::did_key(&env, &controller);
@@ -296,6 +322,17 @@ impl IdentityRegistry {
         doc.updated_at = env.ledger().timestamp();
 
         storage.set(&key, &doc);
+        env.events().publish((IDENTITY, symbol_short!("updated")), controller);
+        Ok(())
+    }
+
+    /// Deactivate a DID (soft delete).
+    pub fn deactivate_did(env: Env, controller: Address) -> Result<(), IdentityError> {
+        controller.require_auth();
+
+        let storage = env.storage().persistent();
+        let key = Self::did_key(&env, &controller);
+        let mut doc: DidDocument = storage.get(&key).ok_or(IdentityError::NotFound)?;
         storage.extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
 
         // Hash the DID id + updated_at as a deterministic metadata fingerprint
@@ -334,6 +371,7 @@ impl IdentityRegistry {
         doc.updated_at = env.ledger().timestamp();
 
         storage.set(&key, &doc);
+        env.events().publish((IDENTITY, symbol_short!("deactivated")), controller);
         storage.extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
 
         // Decrement DID count
@@ -350,6 +388,8 @@ impl IdentityRegistry {
     }
 
     /// Resolve a DID document by controller address.
+    pub fn resolve_did(env: Env, controller: Address) -> Result<DidDocument, IdentityError> {
+        let key = Self::did_key(&env, &controller);
     pub fn resolve_did(env: Env, controller: Address) -> DidDocument {
         let key = keys::did_key(&env, &controller);
         env.storage()
@@ -373,6 +413,7 @@ impl IdentityRegistry {
             .storage()
             .persistent()
             .get(&key)
+            .ok_or(IdentityError::NotFound)
             .ok_or(ContractError::DidNotFound)?;
         if !doc.active {
             return Err(ContractError::DidDeactivated);
@@ -412,6 +453,12 @@ impl IdentityRegistry {
         env.storage().instance().get(&DID_COUNT).unwrap_or(0)
     }
 
+    fn did_key(env: &Env, controller: &Address) -> Bytes {
+        let mut key = Bytes::new(env);
+        key.extend_from_array(&[b'd', b'i', b'd', b':']);
+        let addr_bytes = controller.to_string().into_bytes();
+        key.extend_from_slice(&addr_bytes);
+        key
     /// Returns storage usage statistics for the identity registry.
     ///
     /// Includes the total number of DIDs ever created (`total_dids`) and the
@@ -429,7 +476,6 @@ impl IdentityRegistry {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn build_did_id(env: &Env, controller: &Address) -> String {
-        // did:stellar:<bech32-address>
         let prefix = String::from_str(env, "did:stellar:");
     /// Canonical init guard — see `contracts/README.md`.
     fn require_uninitialized(env: &Env) -> Result<(), ContractError> {
@@ -635,6 +681,10 @@ mod tests {
         assert!(!client.has_active_did(&user));
     }
 
+    #[test]
+    fn test_error_variants() {
+        let env = Env::default();
+        env.mock_all_auths();
     /// resolve_did on a deactivated DID must return DidDeactivated error.
     #[test]
     fn test_resolve_deactivated_did_returns_error() {
@@ -647,6 +697,14 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
 
+        assert_eq!(client.try_initialize(&admin), Err(Ok(IdentityError::AlreadyInitialized)));
+
+        let user = Address::generate(&env);
+        assert_eq!(client.try_resolve_did(&user), Err(Ok(IdentityError::NotFound)));
+
+        let metadata: Map<String, String> = Map::new(&env);
+        client.create_did(&user, &metadata);
+        assert_eq!(client.try_create_did(&user, &metadata), Err(Ok(IdentityError::AlreadyExists)));
         let user = Address::generate(&env);
         client.create_did(&user, &Map::new(&env));
         client.deactivate_did(&user);

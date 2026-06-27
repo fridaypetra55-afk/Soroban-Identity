@@ -6,6 +6,7 @@ import {
   Keypair,
 } from "@stellar/stellar-sdk";
 import type { DidDocument, SorobanIdentityConfig } from "./types";
+import { parseContractError } from "./errors";
 import { executeTransaction, TxOptions } from "./transaction";
 import {
   encodeAddress,
@@ -180,6 +181,12 @@ export class IdentityClient extends BaseClient {
       throw new SorobanIdentityError(`Transaction failed: ${result.status}`, "CONTRACT_ERROR");
     }
 
+    try {
+      const confirmed = await this.waitForConfirmation(result.hash);
+      return scValToNative(confirmed.returnValue!) as string;
+    } catch (e) {
+      throw parseContractError(e, "identity");
+    }
     const txHash = result.hash;
     try {
       await pollTransactionStatus(this.server, txHash, {
@@ -310,6 +317,10 @@ export class IdentityClient extends BaseClient {
       .setTimeout(timeout)
       .build();
 
+    const result = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw parseContractError(result.error, "identity");
+    }
     const maxRetries = options?.maxRetries ?? this.config.maxRetries ?? 3;
     const baseDelayMs = options?.baseDelayMs ?? this.config.baseDelayMs ?? 500;
     const backoffFactor = options?.backoffFactor ?? this.config.backoffFactor ?? 2;
@@ -378,12 +389,26 @@ export class IdentityClient extends BaseClient {
     this.debug('sdk.simulation_result', { operation: 'identity.simulateTransaction', success: !isSimulationError });
     if (isSimulationError) return false;
 
-    return scValToNative(
+    const native = scValToNative(
       (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
         .result!.retval
-    ) as boolean;
+    );
+    return typeof native === "boolean" ? native : Boolean(native);
   }
 
+  private async waitForConfirmation(
+    hash: string,
+    retries = 10
+  ): Promise<SorobanRpc.Api.GetSuccessfulTransactionResponse> {
+    for (let i = 0; i < retries; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const status = await this.server.getTransaction(hash);
+      if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        return status as SorobanRpc.Api.GetSuccessfulTransactionResponse;
+      }
+      if (status.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        throw parseContractError((status as any).resultXdr || "Transaction failed on-chain", "identity");
+      }
   /**
    * Get the total count of active DIDs registered.
    *

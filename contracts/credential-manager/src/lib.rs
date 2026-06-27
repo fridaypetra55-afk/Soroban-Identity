@@ -10,6 +10,8 @@ mod revocation;
 
 pub use types::{Credential, CredentialType};
 use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short,
+    Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes,
     BytesN, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
@@ -56,6 +58,18 @@ pub enum ContractError {
 const TTL_MAX: u32 = 6_312_000;
 /// Minimum TTL threshold before we bother extending (1 day in ledgers).
 const TTL_MIN: u32 = 17_280;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CredentialError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotFound = 3,
+    Unauthorized = 4,
+    NotAnIssuer = 5,
+}
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -155,6 +169,18 @@ impl CredentialManager {
 
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    pub fn initialize(env: Env, admin: Address) -> Result<(), CredentialError> {
+        if env.storage().instance().has(&ADMIN) {
+            return Err(CredentialError::AlreadyInitialized);
+        }
+        env.storage().instance().set(&ADMIN, &admin);
+        Ok(())
+    }
+
+    /// Register a trusted issuer (admin only).
+    pub fn add_issuer(env: Env, issuer: Address) -> Result<(), CredentialError> {
+        Self::require_admin(&env)?;
+        let mut issuers = Self::get_issuers(&env);
     /// Initializes the credential manager with an admin address.
     ///
     /// Must be called once before any other function. Subsequent calls will
@@ -261,6 +287,14 @@ impl CredentialManager {
         Ok(())
     }
 
+    /// Remove a trusted issuer (admin only).
+    pub fn remove_issuer(env: Env, issuer: Address) -> Result<(), CredentialError> {
+        Self::require_admin(&env)?;
+        let issuers = Self::get_issuers(&env);
+        let updated: Vec<Address> = issuers
+            .iter()
+            .filter(|i| i != issuer)
+            .collect();
     /// Removes a trusted issuer (admin only).
     ///
     /// After removal the address can no longer issue new credentials. Existing
@@ -322,6 +356,9 @@ impl CredentialManager {
         claims_hash: BytesN<32>,
         signature: Bytes,
         expires_at: u64,
+    ) -> Result<BytesN<32>, CredentialError> {
+        issuer.require_auth();
+        Self::require_issuer(&env, &issuer)?;
     ) -> BytesN<32> {
         credential::issue_credential(
             &env, issuer, subject, credential_type, claims, signature, expires_at,
@@ -398,6 +435,7 @@ impl CredentialManager {
         let ttl = Self::ttl_for_credential(&env, expires_at);
         env.storage().persistent().extend_ttl(&key, ttl, ttl);
 
+        let mut subject_creds = Self::get_subject_credentials(&env, &subject);
         // Index credential under subject
         let mut subject_creds = Self::fetch_subject_creds(&env, &subject);
         subject_creds.push_back(id.clone());
@@ -429,6 +467,8 @@ impl CredentialManager {
         Ok(id)
     }
 
+    /// Revoke a credential. Only the original issuer can revoke.
+    pub fn revoke_credential(env: Env, issuer: Address, credential_id: BytesN<32>) -> Result<(), CredentialError> {
     /// Revokes a credential. Only the original issuer can revoke their own credential.
     ///
     /// Revoked credentials return `false` from [`Self::verify_credential`] and
@@ -456,6 +496,10 @@ impl CredentialManager {
             .storage()
             .persistent()
             .get(&key)
+            .ok_or(CredentialError::NotFound)?;
+
+        if cred.issuer != issuer {
+            return Err(CredentialError::Unauthorized);
             .ok_or(ContractError::CredentialNotFound)?;
 
         if cred.issuer != issuer {
@@ -464,6 +508,7 @@ impl CredentialManager {
 
         cred.revoked = true;
         env.storage().persistent().set(&key, &cred);
+        env.events().publish((CRED, symbol_short!("revoked")), credential_id);
         // Do NOT extend TTL for revoked credentials — let them expire naturally
 
         let revoked: u32 = env.storage().instance().get(&REVOKED_CNT).unwrap_or(0);
@@ -515,6 +560,13 @@ impl CredentialManager {
         }
     }
 
+    /// Get a credential by ID.
+    pub fn get_credential(env: Env, credential_id: BytesN<32>) -> Result<Credential, CredentialError> {
+        let key = Self::cred_key(&env, &credential_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .ok_or(CredentialError::NotFound)
     /// Retrieves a credential by its ID.
     ///
     /// # Arguments
@@ -811,6 +863,8 @@ impl CredentialManager {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    fn require_admin(env: &Env) -> Result<(), CredentialError> {
+        let admin: Address = env.storage().instance().get(&ADMIN).ok_or(CredentialError::NotInitialized)?;
     /// Canonical init guard — see `contracts/README.md`.
     fn require_uninitialized(env: &Env) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN) {
@@ -834,6 +888,10 @@ impl CredentialManager {
         Ok(())
     }
 
+    fn require_issuer(env: &Env, issuer: &Address) -> Result<(), CredentialError> {
+        let issuers = Self::get_issuers(env);
+        if !issuers.contains(issuer) {
+            return Err(CredentialError::NotAnIssuer);
     fn require_issuer(env: &Env, issuer: &Address) -> Result<(), ContractError> {
         let issuers = Self::get_issuers_internal(env);
         if !issuers.contains(issuer) {
@@ -1557,5 +1615,23 @@ mod tests {
                 assert_ne!(left, right);
             }
         }
+    }
+
+    #[test]
+    fn test_error_variants() {
+        let (env, admin, client) = setup();
+
+        assert_eq!(client.try_initialize(&admin), Err(Ok(CredentialError::AlreadyInitialized)));
+
+        let fake_id = BytesN::from_array(&env, &[1u8; 32]);
+        assert_eq!(client.try_get_credential(&fake_id), Err(Ok(CredentialError::NotFound)));
+
+        let rando = Address::generate(&env);
+        let claims: Map<String, String> = Map::new(&env);
+        let sig = Bytes::from_array(&env, &[0u8; 64]);
+        assert_eq!(
+            client.try_issue_credential(&rando, &rando, &CredentialType::Kyc, &claims, &sig, &0u64),
+            Err(Ok(CredentialError::NotAnIssuer))
+        );
     }
 }

@@ -7,6 +7,8 @@
 //! so scores can be audited or disputed.
 
 use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short,
+    Address, Env, Symbol, Vec,
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
     Symbol, Vec,
 };
@@ -55,6 +57,16 @@ const TTL_MAX: u32 = 6_312_000;
 
 /// Max history items to keep per reporter-subject pair to bound storage
 const MAX_HISTORY: usize = 50;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ReputationError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotAReporter = 3,
+}
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -133,6 +145,15 @@ impl Reputation {
 
     // ── Admin ─────────────────────────────────────────────────────────────────
 
+    pub fn initialize(env: Env, admin: Address) -> Result<(), ReputationError> {
+        if env.storage().instance().has(&ADMIN) {
+            return Err(ReputationError::AlreadyInitialized);
+        }
+        env.storage().instance().set(&ADMIN, &admin);
+        Ok(())
+    }
+
+    pub fn add_reporter(env: Env, reporter: Address) -> Result<(), ReputationError> {
     /// Initializes the reputation contract with an admin address.
     ///
     /// Must be called once before any other function. Subsequent calls will
@@ -226,6 +247,7 @@ impl Reputation {
         Ok(())
     }
 
+    pub fn remove_reporter(env: Env, reporter: Address) -> Result<(), ReputationError> {
     /// Removes a trusted reporter (admin only).
     ///
     /// After removal the address can no longer submit scores. Existing score
@@ -245,6 +267,7 @@ impl Reputation {
             }
         }
         env.storage().instance().set(&REPORTER, &updated);
+        Ok(())
         env.events().publish(
             (REPORTER, symbol_short!("removed")),
             (EVENT_VERSION, reporter, env.ledger().timestamp()),
@@ -372,6 +395,7 @@ impl Reputation {
         subject: Address,
         delta: i64,
         reason: soroban_sdk::String,
+    ) -> Result<(), ReputationError> {
     ) -> Result<(), ContractError> {
         reporter.require_auth();
         Self::require_reporter(&env, &reporter)?;
@@ -384,6 +408,7 @@ impl Reputation {
             return Err(ContractError::ReasonTooLong);
         }
 
+        let rec_key = Self::record_key(&env, &subject);
         let rec_key = keys::record_key(&subject);
         let mut record: ReputationRecord = env
         // Rate limiting: enforce MIN_INTERVAL ledgers between submissions per (reporter, subject)
@@ -415,6 +440,7 @@ impl Reputation {
         record.score = record.score.saturating_add(delta).max(MIN_SCORE);
         record.updated_at = now;
 
+        let history_key = Self::history_key(&env, &subject, &reporter);
         let history_key = keys::history_key(&subject, &reporter);
         let is_new = !env.storage().persistent().has(&history_key);
         if is_new {
@@ -453,6 +479,8 @@ impl Reputation {
         let score_cnt: u32 = env.storage().instance().get(&SCORE_CNT).unwrap_or(0);
         env.storage().instance().set(&SCORE_CNT, &(score_cnt + 1));
 
+        env.events()
+            .publish((symbol_short!("SCORE"), symbol_short!("updated")), (reporter, subject, delta));
         env.events().publish(
             (symbol_short!("SCORE"), symbol_short!("updated")),
             (EVENT_VERSION, reporter, subject, delta),
@@ -724,6 +752,8 @@ impl Reputation {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    fn require_admin(env: &Env) -> Result<(), ReputationError> {
+        let admin: Address = env.storage().instance().get(&ADMIN).ok_or(ReputationError::NotInitialized)?;
     /// Canonical init guard — see `contracts/README.md`.
     fn require_uninitialized(env: &Env) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN) {
@@ -747,6 +777,9 @@ impl Reputation {
         Ok(())
     }
 
+    fn require_reporter(env: &Env, reporter: &Address) -> Result<(), ReputationError> {
+        if !Self::get_reporters(env).contains(reporter) {
+            return Err(ReputationError::NotAReporter);
     fn require_reporter(env: &Env, reporter: &Address) -> Result<(), ContractError> {
         if !Self::get_reporters(env).contains(reporter) {
             return Err(ContractError::ReporterNotFound);
@@ -856,7 +889,7 @@ mod tests {
 
         let rec = client.get_reputation(&subject);
         assert_eq!(rec.score, 75);
-        assert_eq!(rec.reporter_count, 1); // same reporter
+        assert_eq!(rec.reporter_count, 1);
     }
 
     #[test]
@@ -923,12 +956,14 @@ mod tests {
         client.submit_score(&reporter1, &subject, &40, &reason);
         client.submit_score(&reporter2, &subject, &40, &reason);
 
-        // score=80, reporters=2 — should pass
         assert!(client.passes_sybil_check(&subject, &50, &2));
-        // requires 3 reporters — should fail
         assert!(!client.passes_sybil_check(&subject, &50, &3));
     }
 
+    #[test]
+    fn test_error_variants() {
+        let env = Env::default();
+        env.mock_all_auths();
     /// submit_score must panic when the reporter is not registered.
     #[test]
     #[should_panic]
@@ -986,6 +1021,14 @@ mod tests {
         let admin = Address::generate(&env);
         client.initialize(&admin);
 
+        assert_eq!(client.try_initialize(&admin), Err(Ok(ReputationError::AlreadyInitialized)));
+
+        let rando = Address::generate(&env);
+        let reason = String::from_str(&env, "scam");
+        assert_eq!(
+            client.try_submit_score(&rando, &rando, &10, &reason),
+            Err(Ok(ReputationError::NotAReporter))
+        );
         let subject = Address::generate(&env); // no history
                                                // Even with zero thresholds the contract returns false when no record exists
         assert!(!client.passes_sybil_check(&subject, &0, &0));
