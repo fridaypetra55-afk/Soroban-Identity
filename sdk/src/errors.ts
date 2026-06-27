@@ -39,6 +39,7 @@ export type SorobanErrorCode =
   | "RATE_LIMITED"
   | "TIMEOUT"
   | "VALIDATION_ERROR"
+  | "CLIENT_DISPOSED"
   | "UNKNOWN";
 
 export interface SorobanIdentityErrorInit {
@@ -189,6 +190,25 @@ export class ContractError extends Error {
       message: this.message,
       details: { contractCode: this.code },
     };
+  }
+}
+
+/**
+ * Thrown when a request is submitted to a {@link BaseClient} that has already
+ * been disposed, or when `dispose()` drains all pending in-flight requests.
+ *
+ * @example
+ * ```ts
+ * client.dispose();
+ * await pendingPromise; // rejects with ClientDisposedError
+ * ```
+ */
+export class ClientDisposedError extends Error {
+  readonly code = "CLIENT_DISPOSED" as const;
+
+  constructor() {
+    super("Client has been disposed");
+    this.name = "ClientDisposedError";
   }
 }
 
