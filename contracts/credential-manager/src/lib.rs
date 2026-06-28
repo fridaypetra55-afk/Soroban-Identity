@@ -38,6 +38,7 @@ const REVOKED_CNT: Symbol = symbol_short!("REVCNT");
 const ISSUER_CREDS: Symbol = symbol_short!("ISSCREDS");
 
 const MAX_ISSUERS: u32 = 100;
+const MAX_ISSUER_CREDS: u32 = 10_000;
 const IDENTITY_REGISTRY: Symbol = symbol_short!("IDREGIST");
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -487,7 +488,12 @@ impl CredentialManager {
             .extend_ttl(&subject_key, TTL_MAX, TTL_MAX);
 
         // Index credential under issuer for reverse lookup
+        // Apply ring-buffer semantics: cap at MAX_ISSUER_CREDS
         let mut issuer_creds = Self::fetch_issuer_creds(&env, &issuer);
+        if issuer_creds.len() >= MAX_ISSUER_CREDS {
+            // Drop the oldest (head) entry
+            issuer_creds = issuer_creds.slice(1..issuer_creds.len());
+        }
         issuer_creds.push_back(id.clone());
         let issuer_creds_key = Self::issuer_creds_key(&issuer);
         env.storage().persistent().set(&issuer_creds_key, &issuer_creds);
@@ -1699,5 +1705,48 @@ mod tests {
             client.try_issue_credential(&rando, &rando, &CredentialType::Kyc, &claims, &sig, &0u64),
             Err(Ok(CredentialError::NotAnIssuer))
         );
+    }
+
+    /// Ring-buffer eviction: when issuer index reaches MAX_ISSUER_CREDS,
+    /// issuing the (MAX_ISSUER_CREDS + 1)th credential drops the oldest entry.
+    #[test]
+    fn test_issuer_credentials_ring_buffer_eviction() {
+        let (env, _admin, client) = setup();
+        let issuer = Address::generate(&env);
+        client.add_issuer(&issuer);
+
+        // Issue MAX_ISSUER_CREDS credentials from different subjects
+        let mut first_id = None;
+        for i in 0..MAX_ISSUER_CREDS {
+            let subject = Address::generate(&env);
+            let id = issue_kyc(&env, &client, &issuer, &subject);
+            if i == 0 {
+                first_id = Some(id);
+            }
+        }
+
+        // Index should be at MAX_ISSUER_CREDS
+        let creds_before = client.get_issuer_credentials(&issuer);
+        assert_eq!(creds_before.len(), MAX_ISSUER_CREDS as u32);
+
+        // Issue one more credential — should not panic and index stays at MAX_ISSUER_CREDS
+        let new_subject = Address::generate(&env);
+        let _new_id = issue_kyc(&env, &client, &issuer, &new_subject);
+
+        let creds_after = client.get_issuer_credentials(&issuer);
+        assert_eq!(creds_after.len(), MAX_ISSUER_CREDS as u32);
+
+        // The first credential ID should have been evicted (removed from head)
+        if let Some(first) = first_id {
+            // Verify first_id is NOT in the list after eviction
+            let mut found = false;
+            for cred_id in creds_after.iter() {
+                if cred_id == first {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(!found, "First credential ID should have been evicted from the index");
+        }
     }
 }
