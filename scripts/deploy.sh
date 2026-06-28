@@ -258,3 +258,9 @@ echo "========================================"
 echo ""
 echo "Contract IDs written to deployed.env"
 echo "Update sdk/src/index.ts with the IDs above."
+
+POST_DEPLOY_HEALTH_CHECK="$(dirname "$0")/post_deploy_health_check.sh"
+if [ -f "$POST_DEPLOY_HEALTH_CHECK" ]; then
+  echo "==> Running post-deploy health check..."
+  bash "$POST_DEPLOY_HEALTH_CHECK"
+fi

@@ -21,6 +21,7 @@ export interface ContractEvent {
   ledger: number;
   /** Transaction hash of the transaction that produced this event. */
   txHash: string;
+  eventId: string;
 }
 
 /** Options for a one-shot historical event query via {@link getEvents}. */
@@ -230,6 +231,7 @@ export class SorobanEventListener {
   private isRunning = false;
   private intervalId?: ReturnType<typeof setInterval>;
   private lastLedger = 0;
+  private seenEventIds = new Set<string>();
 
   /**
    * @param rpcUrl     Soroban RPC endpoint URL.
@@ -266,11 +268,15 @@ export class SorobanEventListener {
         });
 
         if (events.events && events.events.length > 0) {
-          const contractEvents = events.events
+          const contractEvents = (events.events
             .map((e) => this.parseEvent(e))
-            .filter((e) => e !== null) as ContractEvent[];
+            .filter((e) => e !== null) as ContractEvent[])
+            .filter((e) => !this.seenEventIds.has(e.eventId));
 
           if (contractEvents.length > 0) {
+            for (const e of contractEvents) {
+              this.seenEventIds.add(e.eventId);
+            }
             callback(contractEvents);
             this.lastLedger =
               Math.max(...contractEvents.map((e) => e.ledger)) + 1;
