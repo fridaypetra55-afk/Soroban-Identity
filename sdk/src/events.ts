@@ -12,6 +12,7 @@ export interface ContractEvent {
   value: Record<string, unknown>;
   ledger: number;
   txHash: string;
+  eventId: string;
 }
 
 export class SorobanEventListener {
@@ -21,6 +22,7 @@ export class SorobanEventListener {
   private isRunning = false;
   private intervalId?: ReturnType<typeof setInterval>;
   private lastLedger = 0;
+  private seenEventIds = new Set<string>();
 
   constructor(rpcUrl: string, contractId: string, filter?: EventFilter) {
     this.server = new SorobanRpc.Server(rpcUrl);
@@ -52,11 +54,15 @@ export class SorobanEventListener {
         });
 
         if (events.events && events.events.length > 0) {
-          const contractEvents = events.events
+          const contractEvents = (events.events
             .map((e) => this.parseEvent(e))
-            .filter((e) => e !== null) as ContractEvent[];
+            .filter((e) => e !== null) as ContractEvent[])
+            .filter((e) => !this.seenEventIds.has(e.eventId));
 
           if (contractEvents.length > 0) {
+            for (const e of contractEvents) {
+              this.seenEventIds.add(e.eventId);
+            }
             callback(contractEvents);
             this.lastLedger =
               Math.max(...contractEvents.map((e) => e.ledger)) + 1;
@@ -107,6 +113,8 @@ export class SorobanEventListener {
           ? (scValToNative(event.value) as Record<string, unknown>)
           : {};
 
+      const eventId = `${event.ledger}:${event.txHash}:${event.id}`;
+
       return {
         type: event.type,
         contractId,
@@ -114,6 +122,7 @@ export class SorobanEventListener {
         value,
         ledger: event.ledger,
         txHash: event.txHash,
+        eventId,
       };
     } catch {
       return null;

@@ -50,28 +50,46 @@ REGISTRY_WASM="contracts/target/wasm32-unknown-unknown/release/identity_registry
 CREDENTIAL_WASM="contracts/target/wasm32-unknown-unknown/release/credential_manager.wasm"
 REPUTATION_WASM="contracts/target/wasm32-unknown-unknown/release/reputation.wasm"
 
+assert_contract_id() {
+  local name="$1"
+  local id="$2"
+  local raw_output="$3"
+  if ! echo "$id" | grep -qE '^[A-Z0-9]{56}$'; then
+    echo "ERROR: $name deployment returned an invalid contract ID: '$id'"
+    echo "Raw RPC output:"
+    echo "$raw_output"
+    exit 1
+  fi
+}
+
 echo "==> Deploying identity-registry..."
-REGISTRY_ID=$(retry_command stellar contract deploy \
+REGISTRY_RAW=$(retry_command stellar contract deploy \
   --wasm "$REGISTRY_WASM" \
   --source "$SOURCE_ACCOUNT" \
   --network "$STELLAR_NETWORK" \
-  --rpc-url "$STELLAR_RPC_URL")
+  --rpc-url "$STELLAR_RPC_URL" 2>&1)
+REGISTRY_ID=$(echo "$REGISTRY_RAW" | tail -n1)
+assert_contract_id "identity-registry" "$REGISTRY_ID" "$REGISTRY_RAW"
 echo "identity-registry: $REGISTRY_ID"
 
 echo "==> Deploying credential-manager..."
-CREDENTIAL_ID=$(retry_command stellar contract deploy \
+CREDENTIAL_RAW=$(retry_command stellar contract deploy \
   --wasm "$CREDENTIAL_WASM" \
   --source "$SOURCE_ACCOUNT" \
   --network "$STELLAR_NETWORK" \
-  --rpc-url "$STELLAR_RPC_URL")
+  --rpc-url "$STELLAR_RPC_URL" 2>&1)
+CREDENTIAL_ID=$(echo "$CREDENTIAL_RAW" | tail -n1)
+assert_contract_id "credential-manager" "$CREDENTIAL_ID" "$CREDENTIAL_RAW"
 echo "credential-manager: $CREDENTIAL_ID"
 
 echo "==> Deploying reputation..."
-REPUTATION_ID=$(retry_command stellar contract deploy \
+REPUTATION_RAW=$(retry_command stellar contract deploy \
   --wasm "$REPUTATION_WASM" \
   --source "$SOURCE_ACCOUNT" \
   --network "$STELLAR_NETWORK" \
-  --rpc-url "$STELLAR_RPC_URL")
+  --rpc-url "$STELLAR_RPC_URL" 2>&1)
+REPUTATION_ID=$(echo "$REPUTATION_RAW" | tail -n1)
+assert_contract_id "reputation" "$REPUTATION_ID" "$REPUTATION_RAW"
 echo "reputation: $REPUTATION_ID"
 
 echo "==> Initializing contracts..."
@@ -118,3 +136,9 @@ echo "========================================"
 echo ""
 echo "Contract IDs written to deployed.env"
 echo "Update sdk/src/index.ts with the IDs above."
+
+POST_DEPLOY_HEALTH_CHECK="$(dirname "$0")/post_deploy_health_check.sh"
+if [ -f "$POST_DEPLOY_HEALTH_CHECK" ]; then
+  echo "==> Running post-deploy health check..."
+  bash "$POST_DEPLOY_HEALTH_CHECK"
+fi
