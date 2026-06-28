@@ -452,6 +452,57 @@ impl IdentityRegistry {
         Ok(())
     }
 
+    /// Reactivates a deactivated DID. Only the admin can call this.
+    ///
+    /// Sets `active=true` and updates `updated_at` on the existing document.
+    /// If the DID is already active, this is a no-op and returns `Ok(())`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment.
+    /// * `admin` - The admin address (must sign the transaction).
+    /// * `controller` - The address whose DID to reactivate.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::Unauthorized`] if `admin` is not the current admin.
+    /// Returns [`ContractError::DidNotFound`] if no DID exists for the controller.
+    pub fn reactivate_did(env: Env, admin: Address, controller: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .ok_or(ContractError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let storage = env.storage().persistent();
+        let key = Self::did_key(&env, &controller);
+        let mut doc: DidDocument = storage.get(&key).ok_or(ContractError::DidNotFound)?;
+
+        // No-op if already active
+        if doc.active {
+            return Ok(());
+        }
+
+        doc.active = true;
+        doc.updated_at = env.ledger().timestamp();
+
+        storage.set(&key, &doc);
+        storage.extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
+
+        // Increment active DID count
+        let count: u32 = env.storage().instance().get(&DID_COUNT).unwrap_or(0);
+        env.storage().instance().set(&DID_COUNT, &(count + 1));
+
+        env.events().publish(
+            (IDENTITY, symbol_short!("reactivated")),
+            (EVENT_VERSION, controller, doc.updated_at),
+        );
+        Ok(())
+    }
+
     /// Resolve a DID document by controller address.
     pub fn resolve_did(env: Env, controller: Address) -> Result<DidDocument, IdentityError> {
         let key = Self::did_key(&env, &controller);
@@ -979,5 +1030,84 @@ mod tests {
         let addr_part = &did_str[DID_STELLAR_PREFIX.len()..];
         assert_eq!(addr_part, expected_addr);
         assert!(IdentityRegistry::validate_did_format(&env, &did));
+    }
+
+    /// reactivate_did called by non-admin returns Unauthorized.
+    #[test]
+    fn test_reactivate_did_unauthorized_non_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, IdentityRegistry);
+        let client = IdentityRegistryClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.create_did(&user, &Map::new(&env));
+        client.deactivate_did(&user);
+
+        let result = client.try_reactivate_did(&non_admin, &user);
+        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+    }
+
+    /// reactivate_did on an already-active DID is a no-op and returns Ok.
+    #[test]
+    fn test_reactivate_did_already_active_is_noop() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, IdentityRegistry);
+        let client = IdentityRegistryClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.create_did(&user, &Map::new(&env));
+
+        // DID is already active; reactivate should be a no-op
+        let result = client.try_reactivate_did(&admin, &user);
+        assert_eq!(result, Ok(Ok(())));
+
+        // Verify DID is still active
+        assert!(client.has_active_did(&user));
+    }
+
+    /// reactivate_did restores an active DID and increments count.
+    #[test]
+    fn test_reactivate_did_restores_active_did() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, IdentityRegistry);
+        let client = IdentityRegistryClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.create_did(&user, &Map::new(&env));
+
+        assert_eq!(client.get_did_count(), 1);
+        assert!(client.has_active_did(&user));
+
+        // Deactivate
+        client.deactivate_did(&user);
+        assert_eq!(client.get_did_count(), 0);
+        assert!(!client.has_active_did(&user));
+
+        // Reactivate
+        let result = client.try_reactivate_did(&admin, &user);
+        assert_eq!(result, Ok(Ok(())));
+
+        assert_eq!(client.get_did_count(), 1);
+        assert!(client.has_active_did(&user));
+
+        // Verify the document is now active
+        let doc = client.resolve_did(&user);
+        assert!(doc.active);
     }
 }
